@@ -32,9 +32,25 @@ class CausalSelfAttention(nn.Module):
     return proj
 
   def attention(self, key, query, value, attention_mask):
-
     ### YOUR CODE HERE
-    raise NotImplementedError
+    # Head dimension
+    d_k = query.shape[-1]
+
+    # Compute scaled dot product for attention
+    attention_scores = torch.matmul(query, key.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+
+    # Apply given attention mask
+    attention_scores += attention_mask
+
+    # Apply softmax
+    attention_dist = torch.nn.functional.softmax(attention_scores, dim=-1)
+
+    # Apply Dropout
+    attention_dist = self.dropout(attention_dist)
+
+    # Return computed attention output
+    attention_output = torch.matmul(attention_dist, value)
+    return attention_output
 
 
   def forward(self, hidden_states, attention_mask):
