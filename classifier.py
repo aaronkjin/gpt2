@@ -65,7 +65,10 @@ class GPT2SentimentClassifier(torch.nn.Module):
     ###       HINT: You should consider what is an appropriate return value given that
     ###       the training loop currently uses F.cross_entropy as the loss function.
     hidden_states = self.gpt(input_ids, attention_mask)
-    cls_embedding = hidden_states[:, 0, :]
+    #print(type(hidden_states))
+    #print(hidden_states)
+    cls_embedding = hidden_states["last_hidden_state"][:, 0, :]
+    #cls_embedding = hidden_states[:, 0, :]
     cls_embedding = self.dropout(cls_embedding)
     logits = self.classifier(cls_embedding)
 
@@ -246,7 +249,7 @@ def save_model(model, optimizer, args, config, filepath):
 
 
 def train(args):
-  device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+  device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
   # Create the data and its corresponding datasets and dataloader.
   train_data, num_labels = load_data(args.train, 'train')
   dev_data = load_data(args.dev, 'valid')
@@ -355,7 +358,7 @@ def get_args():
   parser.add_argument("--fine-tune-mode", type=str,
                       help='last-linear-layer: the GPT parameters are frozen and the task specific head parameters are updated; full-model: GPT parameters are updated as well',
                       choices=('last-linear-layer', 'full-model'), default="last-linear-layer")
-  parser.add_argument("--use_gpu", action='store_true')
+  parser.add_argument("--use_gpu", action='store_true', default=True)
 
   parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
   parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
