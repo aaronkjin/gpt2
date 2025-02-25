@@ -50,6 +50,7 @@ class CausalSelfAttention(nn.Module):
 
     # Return computed attention output
     attention_output = torch.matmul(attention_dist, value)
+    attention_output = rearrange(attention_output, 'b h t d -> b t (h d)')
     return attention_output
 
 
