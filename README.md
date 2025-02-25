@@ -8,6 +8,9 @@ An autocomplete language model using GPT-2 architecture. A CS 224N final project
 # get setup
 conda env create -f env.yml
 conda activate cs224n_dfp
+
+# install dependencies
+pip install -r requirements.txt
 ```
 
 ## Background

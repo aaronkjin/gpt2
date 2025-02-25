@@ -33,13 +33,17 @@ class CausalSelfAttention(nn.Module):
 
   def attention(self, key, query, value, attention_mask):
     ### YOUR CODE HERE
-    # Head dimension
     d_k = query.shape[-1]
 
     # Compute scaled dot product for attention
     attention_scores = torch.matmul(query, key.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
 
-    # Apply given attention mask
+    # Apply attention mask
+    seq_length = attention_scores.size(-1)
+    causal_mask = torch.triu(torch.ones(seq_length, seq_length, device=attention_scores.device), diagonal=1).bool()
+    attention_scores.masked_fill_(causal_mask.unsqueeze(0).unsqueeze(0), -10000.0)
+
+    # Apply given attention mask (for padding)
     attention_scores += attention_mask
 
     # Apply softmax
