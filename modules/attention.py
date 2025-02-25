@@ -36,7 +36,7 @@ class CausalSelfAttention(nn.Module):
     d_k = query.shape[-1]
 
     # Compute scaled dot product for attention
-    attention_scores = torch.matmul(query, key.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+    attention_scores = torch.matmul(query, key.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=query.dtype))
 
     # Apply attention mask
     seq_length = attention_scores.size(-1)

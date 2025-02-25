@@ -64,13 +64,11 @@ class GPT2SentimentClassifier(torch.nn.Module):
     ### TODO: The final GPT contextualized embedding is the hidden state of [CLS] token (the first token).
     ###       HINT: You should consider what is an appropriate return value given that
     ###       the training loop currently uses F.cross_entropy as the loss function.
-    hidden_states = self.gpt(input_ids, attention_mask)
-    cls_embedding = hidden_states[:, 0, :]
-    cls_embedding = self.dropout(cls_embedding)
-    logits = self.classifier(cls_embedding)
-
+    outputs = self.gpt(input_ids, attention_mask)
+    last_token = outputs['last_token']
+    last_token = self.dropout(last_token)
+    logits = self.classifier(last_token)
     return logits
-    raise NotImplementedError
 
 
 
