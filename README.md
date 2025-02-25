@@ -23,4 +23,4 @@ GPT-2 is a large, transformer-based language model that generates text via predi
 
 [Brandon Bui](https://github.com/brandonbui5)
 
-[Eli Wandless](https://github.com/)
+[Eli Wandless](https://github.com/elidbc)
