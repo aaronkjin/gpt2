@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 from einops import rearrange
+from evaluation import test_sonnet
 
 from datasets import (
   SonnetsDataset,
@@ -270,3 +271,5 @@ if __name__ == "__main__":
   seed_everything(args.seed)  # Fix the seed for reproducibility.
   train(args)
   generate_submission_sonnets(args)
+  score = test_sonnet()
+  print("chrF score:", score)
