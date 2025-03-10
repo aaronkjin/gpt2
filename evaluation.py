@@ -64,7 +64,7 @@ def model_test_paraphrase(dataloader, model, device):
 
 def test_sonnet(
     test_path='predictions/generated_sonnets.txt',
-    gold_path='data/TRUE_sonnets_held_out.txt'
+    gold_path = 'data/sonnets_held_out.txt'
 ):
     chrf = CHRF()
 
