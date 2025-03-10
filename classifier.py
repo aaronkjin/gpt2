@@ -71,7 +71,6 @@ class GPT2SentimentClassifier(torch.nn.Module):
     return logits
 
 
-
 class SentimentDataset(Dataset):
   def __init__(self, dataset, args):
     self.dataset = dataset

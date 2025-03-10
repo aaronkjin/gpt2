@@ -33,8 +33,6 @@ class GPT2Layer(nn.Module):
     dropped = dropout(transformed)
     return input + dropped
 
-    raise NotImplementedError
-
 
   def forward(self, hidden_states, attention_mask):
     """
@@ -54,5 +52,4 @@ class GPT2Layer(nn.Module):
     ff_out = self.out_dense(interm)
     hidden_states = self.add(hidden_states, ff_out, lambda x: x, self.out_dropout)
     return hidden_states
-    raise NotImplementedError
 
