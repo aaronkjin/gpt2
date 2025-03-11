@@ -296,10 +296,10 @@ def generate_submission_sonnets(args):
   for batch in held_out_sonnet_dataset:
     sonnet_id = batch[0]
     encoding = model.tokenizer(batch[1], return_tensors='pt', padding=False, truncation=True).to(device)
-    output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)[0][0]
-    decoded_output = model.tokenizer.decode(output)
-    full_sonnet = f'{decoded_output}\n\n'
+    _, generated = model.generate(encoding['input_ids'], num_beams=3, max_length=128)
+    full_sonnet = f'{generated[0]}\n\n'
     generated_sonnets.append((sonnet_id, full_sonnet))
+    print(f'Generated for {sonnet_id}:\n{generated[0]}\n')
 
     print(f'{decoded_output}\n\n')
 
