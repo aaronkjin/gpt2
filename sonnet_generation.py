@@ -74,7 +74,7 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=128):
+  def generate(self, encoding, num_beams=3, max_length=128):
     """
     Generates an original sonnet using top-p sampling and softmax temperature.
 
