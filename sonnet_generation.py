@@ -82,6 +82,56 @@ class SonnetGPT(nn.Module):
     In particular, generating multiple sequences and choosing the best with beam search is one avenue. Top_k is another;
     there are many.
     """
+
+    return self._beam_search_generate(encoding, num_beams = num_beams, max_length = max_length)
+  
+  def _beam_search_generate(self, encoding, num_beams=3, max_length=128):
+    device = self.get_device()
+    # Each candidate: (token_ids, cumulative_log_prob)
+    beam = [(encoding.to(device), 0.0)]
+    completed = []
+
+    for _ in range(max_length):
+      new_beam = []
+      for tokens, cum_log_prob in beam:
+        # If the last token is EOS, add candidate to completed and skip expanding it.
+        if tokens[0, -1].item() == self.tokenizer.eos_token_id:
+          completed.append((tokens, cum_log_prob))
+          continue
+
+        attention_mask = torch.ones(tokens.shape, dtype=torch.int64).to(device)
+        logits = self.forward(tokens, attention_mask)
+        logits_last = logits[:, -1, :]
+        log_probs = torch.log_softmax(logits_last, dim=-1)  # log probabilities
+
+        # Expand each candidate with top candidates (we use all tokens then pick top num_beams)
+        topk_log_probs, topk_indices = torch.topk(log_probs, k=num_beams)
+        for i in range(topk_indices.shape[-1]):
+          next_token = topk_indices[0, i].unsqueeze(0).unsqueeze(0)
+          new_tokens = torch.cat([tokens, next_token], dim=1)
+          new_score = cum_log_prob + topk_log_probs[0, i].item()
+          new_beam.append((new_tokens, new_score))
+
+      if not new_beam:
+        break
+
+      # Keep the top num_beams candidates across all expansions.
+      new_beam = sorted(new_beam, key=lambda x: x[1], reverse=True)[:num_beams]
+      beam = new_beam
+
+      # Optionally, if all beam candidates end with EOS, break early.
+      if all(candidate[0][0, -1].item() == self.tokenizer.eos_token_id for candidate in beam):
+        completed.extend(beam)
+        break
+
+    if completed:
+        best_candidate = sorted(completed, key=lambda x: x[1], reverse=True)[0]
+    else:
+        best_candidate = sorted(beam, key=lambda x: x[1], reverse=True)[0]
+
+    decoded_output = self.tokenizer.decode(best_candidate[0][0].cpu().numpy().tolist())[3:]
+    return None, [decoded_output]
+'''
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
 
@@ -119,7 +169,7 @@ class SonnetGPT(nn.Module):
 
     generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     return token_ids, generated_output
-
+'''
 
 def save_model(model, optimizer, args, filepath):
   save_info = {
@@ -137,6 +187,44 @@ def save_model(model, optimizer, args, filepath):
 
 def train(args):
   """Train GPT-2 for paraphrase detection on the Quora dataset."""
+
+  device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+
+  # Training dataset and loader
+  train_dataset = SonnetsDataset(args.sonnet_path)
+  train_loader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, collate_fn=train_dataset.collate_fn)
+
+
+  args = add_arguments(args)
+  model = SonnetGPT(args).to(device)
+  optimizer = AdamW(model.parameters(), lr=args.lr)
+
+  for epoch in range(args.epochs):
+    model.train()
+    total_loss = 0
+    batch_count = 0
+
+    for batch in tqdm(train_loader, desc=f"Training Epoch {epoch}", disable=TQDM_DISABLE):
+      b_ids = batch['token_ids'].to(device)
+      b_mask = batch['attention_mask'].to(device)
+      optimizer.zero_grad()
+      logits = model(b_ids, b_mask)
+      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+      labels = b_ids[:, 1:].contiguous().flatten()
+      loss = F.cross_entropy(logits, labels, reduction='mean')
+      loss.backward()
+      optimizer.step()
+      total_loss += loss.item()
+      batch_count += 1
+
+    avg_train_loss = total_loss / batch_count
+    print(f"[Epoch {epoch}] Train loss: {avg_train_loss:.3f}")
+
+    # Save checkpoint after each epoch.
+    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
+
+'''
+
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
   # Create the data and its corresponding datasets and dataloader.
   sonnet_dataset = SonnetsDataset(args.sonnet_path)
@@ -188,6 +276,7 @@ def train(args):
 
     # TODO: consider a stopping condition to prevent overfitting on the small dataset of sonnets.
     save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
+    '''
 
 
 @torch.no_grad()
