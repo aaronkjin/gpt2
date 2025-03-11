@@ -301,8 +301,6 @@ def generate_submission_sonnets(args):
     generated_sonnets.append((sonnet_id, full_sonnet))
     print(f'Generated for {sonnet_id}:\n{generated[0]}\n')
 
-    print(f'{decoded_output}\n\n')
-
   with open(args.sonnet_out, "w+") as f:
     f.write(f"--Generated Sonnets-- \n\n")
     for sonnet in generated_sonnets:
