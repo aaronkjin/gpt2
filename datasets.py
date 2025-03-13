@@ -154,13 +154,18 @@ class SonnetsDataset(Dataset):
     input_ids = encoding['input_ids']        # shape: (batch, seq_len)
     original_mask = encoding['attention_mask'] # shape: (batch, seq_len)
 
+    # Check if each sonnet already ends with an EOS token
+    # (Assumes that the EOS token is the last token in the sequence if present)
+    # We create a mask: 1 if the last token is not EOS, 0 otherwise.
+    eos_id = self.tokenizer.eos_token_id
+    need_eos = (input_ids[:, -1] != eos_id).unsqueeze(1)  # shape: (batch, 1), bool
     # Create an EOS token tensor for each example.
-    eos_token = torch.full((input_ids.shape[0], 1), fill_value=self.tokenizer.eos_token_id, dtype=torch.long)
-    # Append the EOS token to input_ids.
-    token_ids = torch.cat([input_ids, eos_token], dim=1)
-    # Extend the attention mask with ones for the EOS token.
-    eos_mask = torch.ones((original_mask.shape[0], 1), dtype=original_mask.dtype)
-    attention_mask = torch.cat([original_mask, eos_mask], dim=1)
+    eos_token = torch.full((input_ids.shape[0], 1), fill_value=eos_id, dtype=torch.long)
+    # Append EOS only where needed.
+    token_ids = torch.where(need_eos, torch.cat([input_ids, eos_token], dim=1), input_ids)
+    # Extend the attention mask accordingly.
+    extra_mask = torch.where(need_eos, torch.ones((input_ids.shape[0], 1), dtype=original_mask.dtype), torch.zeros((input_ids.shape[0], 1), dtype=original_mask.dtype))
+    attention_mask = torch.cat([original_mask, extra_mask], dim=1)
 
     batched_data = {
       'token_ids': token_ids,
