@@ -150,19 +150,21 @@ class SonnetsDataset(Dataset):
     idx = [example[0] for example in all_data]
     sonnets = [example[1] for example in all_data]
 
-    encoding = self.tokenizer(sonnets, return_tensors='pt', padding=False, truncation=True)
-    input_ids_list = []
+    # Tokenize without returning tensors so we get a list of lists.
+    encoding = self.tokenizer(sonnets, padding=False, truncation=True)
     eos_id = self.tokenizer.eos_token_id
 
+    input_ids_list = []
     for seq in encoding['input_ids']:
-        # If the last token is not EOS, append it.
-        if seq[-1].item() != eos_id:
-            seq = torch.cat([seq, torch.tensor([eos_id], dtype=torch.long)])
-        input_ids_list.append(seq)
+        seq_tensor = torch.tensor(seq, dtype=torch.long)
+        # Append EOS token if not already present.
+        if seq_tensor[-1].item() != eos_id:
+            seq_tensor = torch.cat([seq_tensor, torch.tensor([eos_id], dtype=torch.long)])
+        input_ids_list.append(seq_tensor)
 
-    # Pad all sequences to the maximum length in this batch.
+    # Pad the sequences to the same length.
     token_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-    # Create attention mask: 1 for non-pad tokens, 0 for pad tokens.
+    # Create an attention mask: 1 for non-padding tokens, 0 for padding.
     attention_mask = (token_ids != self.tokenizer.pad_token_id).long()
 
     batched_data = {
