@@ -74,7 +74,7 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=True):
+  def generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=False):
     """
     Generates a sonnet using beam search with length normalization.
     
@@ -97,7 +97,7 @@ class SonnetGPT(nn.Module):
         early_stopping=early_stopping
     )
 
-  def _beam_search_generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=True):
+  def _beam_search_generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=False):
     """
     Performs beam search with length normalization.
     Each candidate is represented as a tuple: (token_ids, cumulative_log_prob).
@@ -115,18 +115,18 @@ class SonnetGPT(nn.Module):
           completed.append((tokens, cum_log_prob))
           continue
 
-          attention_mask = torch.ones(tokens.shape, dtype=torch.int64).to(device)
-          logits = self.forward(tokens, attention_mask)
-          logits_last = logits[:, -1, :]
-          log_probs = torch.log_softmax(logits_last, dim=-1)
+        attention_mask = torch.ones(tokens.shape, dtype=torch.int64).to(device)
+        logits = self.forward(tokens, attention_mask)
+        logits_last = logits[:, -1, :]
+        log_probs = torch.log_softmax(logits_last, dim=-1)
 
-          # Expand candidate: get top `num_beams` next tokens.
-          topk_log_probs, topk_indices = torch.topk(log_probs, k=num_beams)
-          for i in range(topk_indices.shape[-1]):
-            next_token = topk_indices[0, i].unsqueeze(0).unsqueeze(0)
-            new_tokens = torch.cat([tokens, next_token], dim=1)
-            new_score = cum_log_prob + topk_log_probs[0, i].item()
-            new_beam.append((new_tokens, new_score))
+        # Expand candidate: get top `num_beams` next tokens.
+        topk_log_probs, topk_indices = torch.topk(log_probs, k=num_beams)
+        for i in range(topk_indices.shape[-1]):
+          next_token = topk_indices[0, i].unsqueeze(0).unsqueeze(0)
+          new_tokens = torch.cat([tokens, next_token], dim=1)
+          new_score = cum_log_prob + topk_log_probs[0, i].item()
+          new_beam.append((new_tokens, new_score))
 
       if not new_beam:
           break
@@ -140,7 +140,7 @@ class SonnetGPT(nn.Module):
       beam = new_beam[:num_beams]
 
       # If early stopping is enabled and all beams have ended with EOS, break.
-      if early_stopping and all(tokens[0, -1].item() == self.tokenizer.eos_token_id for tokens, _ in beam):
+      if early_stopping and all(candidate[0][0, -1].item() == self.tokenizer.eos_token_id for candidate, _ in beam):
         completed.extend(beam)
         break
 
