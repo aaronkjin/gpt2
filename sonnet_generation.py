@@ -217,30 +217,35 @@ def train(args):
 @torch.no_grad()
 def generate_submission_sonnets(args):
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  saved = torch.load(f'{args.epochs-1}_{args.filepath}', weights_only=False)
+    saved = torch.load(f'{args.epochs-1}_{args.filepath}', weights_only=False)
 
-  model = SonnetGPT(saved['args'])
-  model.load_state_dict(saved['model'])
-  model = model.to(device)
-  model.eval()
+    model = SonnetGPT(saved['args'])
+    model.load_state_dict(saved['model'])
+    model = model.to(device)
+    model.eval()
 
-  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
-  held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
+    held_out_dataset = SonnetsDataset(args.held_out_sonnet_path)
+    generated_sonnets = []
+    for batch in held_out_dataset:
+      sonnet_id = batch[0]
+      encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True)
+      # Remove the last token if it is EOS:
+      if encoding['input_ids'][0, -1].item() == model.tokenizer.eos_token_id:
+        encoding['input_ids'] = encoding['input_ids'][:, :-1]
+        encoding['attention_mask'] = encoding['attention_mask'][:, :-1]
+      encoding = encoding.to(device)
+        
+      # Now generate using beam search.
+      _, generated = model.generate(encoding['input_ids'], num_beams=3, max_length=128)
+      full_sonnet = f'{generated[0]}\n\n'
+      generated_sonnets.append((sonnet_id, full_sonnet))
+      print(f'Generated for {sonnet_id}:\n{generated[0]}\n')
 
-  generated_sonnets = []
-  for batch in held_out_sonnet_dataset:
-    sonnet_id = batch[0]
-    encoding = model.tokenizer(batch[1], return_tensors='pt', padding=False, truncation=True).to(device)
-    _, generated = model.generate(encoding['input_ids'], num_beams=3, max_length=128)
-    full_sonnet = f'{generated[0]}\n\n'
-    generated_sonnets.append((sonnet_id, full_sonnet))
-    print(f'Generated for {sonnet_id}:\n{generated[0]}\n')
-
-  with open(args.sonnet_out, "w+") as f:
-    f.write(f"--Generated Sonnets-- \n\n")
-    for sonnet in generated_sonnets:
-      f.write(f"\n{sonnet[0]}\n")
-      f.write(sonnet[1])
+    with open(args.sonnet_out, "w+") as f:
+      f.write("--Generated Sonnets--\n\n")
+      for sonnet in generated_sonnets:
+        f.write(f"\n{sonnet[0]}\n")
+        f.write(sonnet[1])
 
 
 def get_args():
