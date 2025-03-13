@@ -52,10 +52,17 @@ class SonnetGPT(nn.Module):
     self.tokenizer.pad_token = self.tokenizer.eos_token
     self.lm_head = nn.Linear(args.d, self.gpt.config.vocab_size, bias=False)
 
+    # Instead of fine-tuning the full model, freeze lower layers and only fine-tune the top transformer block and lm_head.
+    # Assuming self.gpt.h is the list of transformer blocks.
+    for i, block in enumerate(self.gpt.h):
+      if i < len(self.gpt.h) - 1:  # Freeze all but the last block
+        for param in block.parameters():
+          param.requires_grad = False
 
-    # By default, fine-tune the full model. TODO: this is maybe not idea.
-    for param in self.gpt.parameters():
-      param.requires_grad = True
+    # Optionally freeze the token embeddings to preserve pre-trained representations.
+    if hasattr(self.gpt, 'wte'):
+      for param in self.gpt.wte.parameters():
+        param.requires_grad = False
 
   def forward(self, input_ids, attention_mask):
     """
