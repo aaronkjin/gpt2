@@ -150,7 +150,7 @@ class SonnetGPT(nn.Module):
     else:
       best_candidate = max(beam, key=lambda x: x[1] / (x[0].shape[1] ** length_penalty))
 
-    decoded_output = self.tokenizer.decode(best_candidate[0][0].cpu().numpy().tolist())[3:]
+    decoded_output = self.tokenizer.decode(best_candidate[0][0].cpu().numpy().tolist()).strip()
     return None, [decoded_output]
 
 def save_model(model, optimizer, args, filepath):
@@ -187,6 +187,9 @@ def train(args):
     for batch in tqdm(train_loader, desc=f"Training Epoch {epoch}", disable=TQDM_DISABLE):
       b_ids = batch['token_ids'].to(device)
       b_mask = batch['attention_mask'].to(device)
+      eos_token = torch.tensor([[model.tokenizer.eos_token_id]] * b_ids.shape[0], device=device)
+      b_ids = torch.cat([b_ids, eos_token], dim=1)
+      
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
       logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
