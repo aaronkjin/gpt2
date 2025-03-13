@@ -151,9 +151,16 @@ class SonnetsDataset(Dataset):
     sonnets = [example[1] for example in all_data]
 
     encoding = self.tokenizer(sonnets, return_tensors='pt', padding=True, truncation=True)
-    eos_token = torch.tensor([[self.tokenizer.eos_token_id]] * len(sonnets), dtype=torch.long)
-    token_ids = torch.cat([encoding['input_ids'], eos_token], dim=1)
-    attention_mask = torch.ones_like(token_ids)  # Ensure attention mask covers EOS as well.
+    input_ids = encoding['input_ids']        # shape: (batch, seq_len)
+    original_mask = encoding['attention_mask'] # shape: (batch, seq_len)
+
+    # Create an EOS token tensor for each example.
+    eos_token = torch.full((input_ids.shape[0], 1), fill_value=self.tokenizer.eos_token_id, dtype=torch.long)
+    # Append the EOS token to input_ids.
+    token_ids = torch.cat([input_ids, eos_token], dim=1)
+    # Extend the attention mask with ones for the EOS token.
+    eos_mask = torch.ones((original_mask.shape[0], 1), dtype=original_mask.dtype)
+    attention_mask = torch.cat([original_mask, eos_mask], dim=1)
 
     batched_data = {
       'token_ids': token_ids,
