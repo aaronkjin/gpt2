@@ -7,7 +7,6 @@ Running:
 trains your SonnetGPT model and writes the required submission files.
 '''
 
-# TESTING GIT BRANCH STUFF
 
 import argparse
 import random
