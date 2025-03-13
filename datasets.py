@@ -13,6 +13,8 @@ import torch
 
 from torch.utils.data import Dataset
 from transformers import GPT2Tokenizer
+from torch.nn.utils.rnn import pad_sequence
+
 
 
 def preprocess_string(s):
