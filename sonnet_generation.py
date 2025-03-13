@@ -64,14 +64,10 @@ class SonnetGPT(nn.Module):
       param.requires_grad = False
 
   def forward(self, input_ids, attention_mask):
-    """
-    This is similar to the forward for ParaphraseGPT, but we now want to produce a logit for each token in our sequence;
-    not just the last token! This will allow our model to learn the natural language distribution that composes sonnets,
-    not just the distribution over next tokens for the last token!
-    """
-    ### YOUR CODE HERE
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
+    # NEW: Apply dropout regularization to the hidden states.
+    hidden_states = F.dropout(hidden_states, p=0.1, training=self.training)
     logits = self.lm_head(hidden_states)
     return logits
     
@@ -293,8 +289,10 @@ def train(args):
       logits = model(b_ids, b_mask)
       logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
       labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
-      loss = F.cross_entropy(logits, labels, reduction='mean')
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1) #ELI ADDED LABEL SMOOTHING
       loss.backward()
+
+      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
       optimizer.step()
 
       train_loss += loss.item()
