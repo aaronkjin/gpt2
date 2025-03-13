@@ -187,8 +187,6 @@ def train(args):
     for batch in tqdm(train_loader, desc=f"Training Epoch {epoch}", disable=TQDM_DISABLE):
       b_ids = batch['token_ids'].to(device)
       b_mask = batch['attention_mask'].to(device)
-      eos_token = torch.tensor([[model.tokenizer.eos_token_id]] * b_ids.shape[0], device=device)
-      b_ids = torch.cat([b_ids, eos_token], dim=1)
       
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
