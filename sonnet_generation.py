@@ -7,7 +7,6 @@ Running:
 trains your SonnetGPT model and writes the required submission files.
 '''
 
-
 import argparse
 import random
 import torch
@@ -51,7 +50,8 @@ class SonnetGPT(nn.Module):
     self.gpt = GPT2Model.from_pretrained(model=args.model_size, d=args.d, l=args.l, num_heads=args.num_heads)
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
-    self.lm_head = nn.Linear(args.d, self.tokenizer.vocab_size)
+    self.lm_head = nn.Linear(args.d, self.gpt.config.vocab_size, bias=False)
+
 
     # By default, fine-tune the full model. TODO: this is maybe not idea.
     for param in self.gpt.parameters():
@@ -64,10 +64,11 @@ class SonnetGPT(nn.Module):
     not just the distribution over next tokens for the last token!
     """
     ### YOUR CODE HERE
-    outputs = self.gpt(input_ids = input_ids, attention_mask = attention_mask)
-    hidden_states = outputs["last_hidden_state"]  
-    logits = self.lm_head(hidden_states)           
+    outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
+    hidden_states = outputs["last_hidden_state"]
+    logits = self.lm_head(hidden_states)
     return logits
+    
 
 
   def get_device(self):
@@ -75,84 +76,157 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=False):
+  def generate(self, input_ids, temperature=0.7, top_k=50, beam_width=1, max_length=128, do_sample=True):
     """
-    Generates a sonnet using beam search with length normalization.
+    Generates an original sonnet using advanced sampling techniques:
     
-    Args:
-      encoding: Input tensor (e.g. from tokenization of the first 3 lines).
-      num_beams: The beam width.
-      max_length: Maximum length (in tokens) to generate.
-      length_penalty: Exponent used to normalize beam scores by sequence length.
-                      (values > 1 favor longer sequences; values < 1 favor shorter ones)
-      early_stopping: If True, stops early when all beams end with the EOS token.
-      
-    Returns:
-      A tuple (None, [decoded_output_string]).
+    Beam Search: If beam_width > 1, uses beam search with length normalization (exponent=0.7).
+    Top-K Sampling: If do_sample is True and beam_width==1, at each generation step only the top_k tokens are considered.
+    Greedy: If do_sample is False and beam_width==1, picks the highest probability token.
+    
+    Temperature scaling is applied to the logits before sampling.
+    
+    NEW MODIFICATIONS:
+      - Enforces a 14-line limit (Shakespearean sonnet format).
+      - Enforces the rhyme scheme (ABABCDCDEFEFGG) by biasing the generation of line endings.
     """
-    return self._beam_search_generate(
-        encoding, 
-        num_beams=num_beams, 
-        max_length=max_length, 
-        length_penalty=length_penalty, 
-        early_stopping=early_stopping
-    )
+    if beam_width > 1:
+      best_seq = self._beam_search_generate(input_ids, temperature, top_k, beam_width, max_length)
+      generated_output = self.tokenizer.decode(best_seq[0].cpu().numpy().tolist())[3:]
+      return best_seq, generated_output
+    else:
+      # --- NEW: Structural Constraints Setup ---
+      max_lines = 14
+      # Identify the newline token id (used to count line breaks)
+      newline_token_id = self.tokenizer.encode("\n", add_special_tokens=False)[0]
+      # Decode the prompt and count how many lines are already present.
+      decoded_prompt = self.tokenizer.decode(input_ids[0].cpu().numpy().tolist())
+      current_line_count = decoded_prompt.count("\n")
+      # Define the Shakespearean rhyme scheme: ABAB CDCDEFEFGG
+      rhyme_pattern = ['A','B','A','B','C','D','C','D','E','F','E','F','G','G']
+      # For lines already in the prompt, extract their ending word to serve as the target rhyme.
+      rhyme_map = {}  # Mapping: rhyme letter -> target ending word.
+      lines = decoded_prompt.split("\n")
+      for i, line in enumerate(lines):
+        if i < max_lines and line.strip():
+          last_word = line.strip().split()[-1]
+          letter = rhyme_pattern[i]
+          if letter not in rhyme_map:
+            rhyme_map[letter] = last_word
+      # ------------------------------------------------
 
-  def _beam_search_generate(self, encoding, num_beams=3, max_length=128, length_penalty=1.0, early_stopping=False):
-    """
-    Performs beam search with length normalization.
-    Each candidate is represented as a tuple: (token_ids, cumulative_log_prob).
-    """
-    device = self.get_device()
-    # Initialize beam with the given encoding and zero log probability.
-    beam = [(encoding.to(device), 0.0)]
-    completed = []
+      token_ids = input_ids.to(self.get_device())
+      attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
 
-    for step in range(max_length):
-      new_beam = []
-      for tokens, cum_log_prob in beam:
-        # If candidate already ends with EOS, mark it as complete.
-        if tokens[0, -1].item() == self.tokenizer.eos_token_id:
-          completed.append((tokens, cum_log_prob))
-          continue
+      while token_ids.shape[1] < max_length:
+        # Forward pass to get logits
+        logits_sequence = self.forward(token_ids, attention_mask)
+        logits_last_token = logits_sequence[:, -1, :] / temperature  # Temperature scaling
 
-        attention_mask = torch.ones(tokens.shape, dtype=torch.int64).to(device)
-        logits = self.forward(tokens, attention_mask)
-        logits_last = logits[:, -1, :]
-        log_probs = torch.log_softmax(logits_last, dim=-1)
+        # --- NEW: Rhyme Enforcement ---
+        # Determine which line is being generated (0-indexed)
+        current_line_index = current_line_count  
+        # If the current line has a rhyme requirement (i.e. a previous line with the same rhyme letter exists),
+        # then bias the logits for candidate tokens that rhyme with the target.
+        if current_line_index < max_lines and rhyme_pattern[current_line_index] in rhyme_map:
+          target_rhyme = rhyme_map[rhyme_pattern[current_line_index]]
+          candidate_ids = self.get_rhyme_token_ids(target_rhyme)
+          for cid in candidate_ids:
+            logits_last_token[0, cid] += 2.0  # Boost factor (tunable)
+        # ---------------------------------
 
-        # Expand candidate: get top `num_beams` next tokens.
-        topk_log_probs, topk_indices = torch.topk(log_probs, k=num_beams)
-        for i in range(topk_indices.shape[-1]):
-          next_token = topk_indices[0, i].unsqueeze(0).unsqueeze(0)
-          new_tokens = torch.cat([tokens, next_token], dim=1)
-          new_score = cum_log_prob + topk_log_probs[0, i].item()
-          new_beam.append((new_tokens, new_score))
+        if do_sample:
+          # Top-K sampling: select from top_k tokens
+          probs = torch.softmax(logits_last_token, dim=-1)
+          topk_probs, topk_indices = torch.topk(probs, k=top_k)
+          topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)  # Re-normalize
+          sampled_index = torch.multinomial(topk_probs, 1)
+          sampled_token = topk_indices.gather(dim=-1, index=sampled_index)
+        else:
+          # Greedy: choose the highest probability token
+          _, sampled_token = torch.max(logits_last_token, dim=-1, keepdim=True)
 
-      if not new_beam:
+        # Stop if EOS token is reached
+        if sampled_token.item() == self.tokenizer.eos_token_id:
           break
 
-        # Apply length normalization: normalized_score = score / (sequence_length^length_penalty)
-      new_beam = sorted(
-          new_beam,
-          key=lambda x: x[1] / (x[0].shape[1] ** length_penalty),
-          reverse=True
-      )
-      beam = new_beam[:num_beams]
+        # Append the sampled token
+        token_ids = torch.cat([token_ids, sampled_token], dim=1)
+        attention_mask = torch.cat(
+          [attention_mask, torch.ones((token_ids.shape[0], 1), dtype=torch.int64).to(self.get_device())],
+          dim=1
+        )
 
-      # If early stopping is enabled and all beams have ended with EOS, break.
-      if early_stopping and all(candidate[0][0, -1].item() == self.tokenizer.eos_token_id for candidate, _ in beam):
-        completed.extend(beam)
+        # --- NEW: Line Count and Rhyme Map Update ---
+        # Check if the generated token is a newline (i.e. end of a line).
+        if sampled_token.item() == newline_token_id:
+          current_line_count += 1
+          decoded_so_far = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())
+          lines_generated = decoded_so_far.split("\n")
+          if len(lines_generated) >= 2:
+            # Get the most recently completed line (the one before the newline)
+            completed_line = lines_generated[-2].strip()
+            if completed_line:
+              last_word = completed_line.split()[-1]
+              letter = rhyme_pattern[current_line_count - 1]
+              # If this is the first occurrence for this rhyme letter, store the target ending.
+              if letter not in rhyme_map:
+                rhyme_map[letter] = last_word
+          # If we have reached the 14-line limit, stop generation.
+          if current_line_count >= max_lines:
+            break
+        # -----------------------------------------------
+      generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+      return token_ids, generated_output
+
+  def get_rhyme_token_ids(self, target_word):
+    """
+    Dummy implementation to obtain token ids for words that rhyme with target_word.
+    In practice, this should use a rhyming dictionary or phonetic lookup.
+    For demonstration purposes, we simply return the token ids for target_word.
+    """
+    return self.tokenizer.encode(target_word, add_special_tokens=False)
+
+  def _beam_search_generate(self, input_ids, temperature, top_k, beam_width, max_length):
+    """
+    Performs beam search generation. At each step, for every candidate sequence the top_k continuations are 
+    considered and the beams are updated. A length normalization penalty (exponent 0.7) is applied.
+    """
+    beams = [(input_ids.to(self.get_device()), 0.0)]  # Each beam: (sequence, cumulative log probability)
+    completed_beams = []
+    norm_exponent = 0.7
+    for _ in range(max_length):
+      new_beams = []
+      for seq, score in beams:
+        # If EOS reached, retain the beam
+        if seq[0, -1].item() == self.tokenizer.eos_token_id:
+          completed_beams.append((seq, score))
+          continue
+        attention_mask = torch.ones(seq.shape, dtype=torch.int64).to(self.get_device())
+        logits = self.forward(seq, attention_mask)
+        logits_last = logits[:, -1, :] / temperature
+        probs = torch.softmax(logits_last, dim=-1)
+        topk_probs, topk_indices = torch.topk(probs, k=top_k)
+        for i in range(top_k):
+          token_prob = topk_probs[0, i].item()
+          token_id = topk_indices[0, i].unsqueeze(0).unsqueeze(0)  # Shape: (1,1)
+          new_seq = torch.cat([seq, token_id], dim=1)
+          new_score = score + math.log(token_prob + 1e-8)  # Accumulate log probability
+          new_beams.append((new_seq, new_score))
+      if not new_beams:
         break
-
-    # Choose the best candidate: use completed candidates if available.
-    if completed:
-      best_candidate = max(completed, key=lambda x: x[1] / (x[0].shape[1] ** length_penalty))
+      # Sort new beams with length normalization to avoid overly short sequences.
+      new_beams = sorted(new_beams, key=lambda x: x[1] / (x[0].shape[1] ** norm_exponent), reverse=True)
+      beams = new_beams[:beam_width]
+      if all(seq[0, -1].item() == self.tokenizer.eos_token_id for seq, _ in beams):
+        completed_beams.extend(beams)
+        break
+    if completed_beams:
+      best_seq, best_score = max(completed_beams, key=lambda x: x[1] / (x[0].shape[1] ** norm_exponent))
     else:
-      best_candidate = max(beam, key=lambda x: x[1] / (x[0].shape[1] ** length_penalty))
+      best_seq, best_score = beams[0]
+    return best_seq
 
-    decoded_output = self.tokenizer.decode(best_candidate[0][0].cpu().numpy().tolist()).strip()
-    return None, [decoded_output]
 
 def save_model(model, optimizer, args, filepath):
   save_info = {
@@ -170,48 +244,56 @@ def save_model(model, optimizer, args, filepath):
 
 def train(args):
   """Train GPT-2 for paraphrase detection on the Quora dataset."""
-
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  train_dataset = SonnetsDataset(args.sonnet_path)
-  train_loader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size,
-                            collate_fn=train_dataset.collate_fn)
-  
-  args = add_arguments(args)
-  model = SonnetGPT(args).to(device)
-  optimizer = AdamW(model.parameters(), lr=args.lr)
+  # Create the data and its corresponding datasets and dataloader.
+  sonnet_dataset = SonnetsDataset(args.sonnet_path)
+  sonnet_dataloader = DataLoader(sonnet_dataset, shuffle=True, batch_size=args.batch_size,
+                                 collate_fn=sonnet_dataset.collate_fn)
 
+  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
+  held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
+
+  args = add_arguments(args)
+  model = SonnetGPT(args)
+  model = model.to(device)
+
+  lr = args.lr
+  optimizer = AdamW(model.parameters(), lr=lr)
+
+  # Run for the specified number of epochs.
   for epoch in range(args.epochs):
     model.train()
-    total_loss = 0
-    batch_count = 0
+    train_loss = 0
+    num_batches = 0
 
-    for batch in tqdm(train_loader, desc=f"Training Epoch {epoch}", disable=TQDM_DISABLE):
-      b_ids = batch['token_ids'].to(device)
-      b_mask = batch['attention_mask'].to(device)
-      
+    for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+      # Get the input and move it to the gpu (I do not recommend training this model on CPU).
+      b_ids, b_mask = batch['token_ids'], batch['attention_mask']
+      b_ids = b_ids.to(device)
+      b_mask = b_mask.to(device)
+
+      # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
-      labels = b_ids[:, 1:].contiguous().flatten()
+      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
+      labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
       loss = F.cross_entropy(logits, labels, reduction='mean')
       loss.backward()
       optimizer.step()
-      total_loss += loss.item()
-      batch_count += 1
 
-    avg_train_loss = total_loss / batch_count
-    print(f"[Epoch {epoch}] Train loss: {avg_train_loss:.3f}")
+      train_loss += loss.item()
+      num_batches += 1
 
-    # Optionally, generate a few output sonnets for qualitative check.
+    train_loss = train_loss / num_batches
+    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
+    print('Generating several output sonnets...')
     model.eval()
-    held_out_dataset = SonnetsDataset(args.held_out_sonnet_path)
-    for batch in held_out_dataset:
+    for batch in held_out_sonnet_dataset:
       encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
-      # Call generate() without temperature/top_p since beam search is used.
-      _, output = model.generate(encoding['input_ids'], num_beams=3, max_length=128)
-      print(f'{batch[1]}\nGenerated: {output[0]}\n')
-        
-        # Save checkpoint after each epoch.
+      output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
+      print(f'{batch[1]}{output[1]}\n\n')
+
+    # TODO: consider a stopping condition to prevent overfitting on the small dataset of sonnets.
     save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
 
@@ -225,25 +307,22 @@ def generate_submission_sonnets(args):
   model = model.to(device)
   model.eval()
 
-  held_out_dataset = SonnetsDataset(args.held_out_sonnet_path)
+  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
+  held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
+
   generated_sonnets = []
-  for batch in held_out_dataset:
+  for batch in held_out_sonnet_dataset:
     sonnet_id = batch[0]
-    encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True)
-    # Remove the last token if it is EOS:
-    if encoding['input_ids'][0, -1].item() == model.tokenizer.eos_token_id:
-      encoding['input_ids'] = encoding['input_ids'][:, :-1]
-      encoding['attention_mask'] = encoding['attention_mask'][:, :-1]
-    encoding = encoding.to(device)
-      
-    # Now generate using beam search.
-    _, generated = model.generate(encoding['input_ids'], num_beams=3, max_length=128)
-    full_sonnet = f'{generated[0]}\n\n'
+    encoding = model.tokenizer(batch[1], return_tensors='pt', padding=False, truncation=True).to(device)
+    output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)[0][0]
+    decoded_output = model.tokenizer.decode(output)
+    full_sonnet = f'{decoded_output}\n\n'
     generated_sonnets.append((sonnet_id, full_sonnet))
-    print(f'Generated for {sonnet_id}:\n{generated[0]}\n')
+
+    print(f'{decoded_output}\n\n')
 
   with open(args.sonnet_out, "w+") as f:
-    f.write("--Generated Sonnets--\n\n")
+    f.write(f"--Generated Sonnets-- \n\n")
     for sonnet in generated_sonnets:
       f.write(f"\n{sonnet[0]}\n")
       f.write(sonnet[1])
