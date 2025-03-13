@@ -82,7 +82,7 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, input_ids, temperature=0.7, top_k=50, beam_width=1, max_length=128, do_sample=True):
+  def generate(self, input_ids, temperature=0.7, top_k=50, top_p=None, beam_width=1, max_length=128, do_sample=True):
     """
     Generates an original sonnet using advanced sampling techniques:
     
@@ -142,15 +142,25 @@ class SonnetGPT(nn.Module):
         # ---------------------------------
 
         if do_sample:
-          # Top-K sampling: select from top_k tokens
           probs = torch.softmax(logits_last_token, dim=-1)
-          topk_probs, topk_indices = torch.topk(probs, k=top_k)
-          topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)  # Re-normalize
-          sampled_index = torch.multinomial(topk_probs, 1)
-          sampled_token = topk_indices.gather(dim=-1, index=sampled_index)
-        else:
-          # Greedy: choose the highest probability token
-          _, sampled_token = torch.max(logits_last_token, dim=-1, keepdim=True)
+          if top_p is not None:
+              # Nucleus (top-p) sampling
+              sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+              cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+              # Create a mask for tokens within the cumulative top_p probability.
+              top_p_mask = cumulative_probs <= top_p
+              top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # shift mask
+              top_p_mask[..., 0] = True  # always include the top token
+              filtered_probs = sorted_probs * top_p_mask
+              filtered_probs = filtered_probs / filtered_probs.sum(dim=-1, keepdim=True)
+              sampled_index = torch.multinomial(filtered_probs, 1)
+              sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
+          else:
+              # Top-K sampling as before
+              topk_probs, topk_indices = torch.topk(probs, k=top_k)
+              topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
+              sampled_index = torch.multinomial(topk_probs, 1)
+              sampled_token = topk_indices.gather(dim=-1, index=sampled_index)
 
         # Stop if EOS token is reached
         if sampled_token.item() == self.tokenizer.eos_token_id:
