@@ -51,8 +51,20 @@ class SonnetGPT(nn.Module):
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
     # By default, fine-tune the full model. TODO: this is maybe not idea.
-    for param in self.gpt.parameters():
-      param.requires_grad = True
+    #for param in self.gpt.parameters():
+    #  param.requires_grad = True
+    for name, param in self.gpt.named_parameters():
+      if "h." in name:
+        # Extract the block index from the parameter name (e.g., "h.3.attn.c_attn.weight")
+        block_index = int(name.split('.')[1])
+        if block_index < args.l - 1:  # Freeze all blocks except the last transformer block.
+          param.requires_grad = False
+        else:
+          param.requires_grad = True
+      else:
+        # Always fine-tune parameters not in the transformer blocks (e.g. embeddings, layer norms, output projection).
+        param.requires_grad = True
+
 
   def forward(self, input_ids, attention_mask):
     """
