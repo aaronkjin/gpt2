@@ -134,7 +134,7 @@ class SonnetGPT(nn.Module):
           target_rhyme = rhyme_map[rhyme_pattern[current_line_index]]
           candidate_ids = self.get_rhyme_token_ids(target_rhyme)
           for cid in candidate_ids:
-            logits_last_token[0, cid] += 2.0  # Boost factor (tunable)
+            logits_last_token[0, cid] += 3.0  # Boost factor (tunable)
         # ---------------------------------
 
         if do_sample:
@@ -271,6 +271,7 @@ def train(args):
 
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
+  scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=2, verbose=True)
 
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
@@ -300,6 +301,7 @@ def train(args):
 
     train_loss = train_loss / num_batches
     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
+    scheduler.step(train_loss)
     print('Generating several output sonnets...')
     model.eval()
     for batch in held_out_sonnet_dataset:
