@@ -51,7 +51,7 @@ class SonnetGPT(nn.Module):
     self.gpt = GPT2Model.from_pretrained(model=args.model_size, d=args.d, l=args.l, num_heads=args.num_heads)
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
-    #self.lm_head = nn.Linear(args.d, self.gpt.config.vocab_size, bias=False)
+    self.lm_head = nn.Linear(args.d, self.gpt.config.vocab_size, bias=False) # remove for logits
 
     # Instead of fine-tuning the full model, freeze lower layers and only fine-tune the top transformer block and lm_head.
     # Assuming self.gpt.h is the list of transformer blocks.
@@ -69,8 +69,8 @@ class SonnetGPT(nn.Module):
     hidden_states = outputs["last_hidden_state"]
     # NEW: Apply dropout regularization to the hidden states.
     hidden_states = F.dropout(hidden_states, p=0.1, training=self.training)
-    #logits = self.lm_head(hidden_states)
-    logits = self.gpt.hidden_state_to_token(hidden_states)
+    logits = self.lm_head(hidden_states)
+    #logits = self.gpt.hidden_state_to_token(hidden_states)
     return logits
     
 
