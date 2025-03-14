@@ -268,7 +268,7 @@ def get_args():
   # Generation parameters.
   parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.0)
   parser.add_argument("--top_p", type=float, help="Cumulative probability distribution for nucleus sampling.",
-                      default=5)
+                      default=0.95)
 
   parser.add_argument("--batch_size", help='The training batch size.', type=int, default=8)
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
