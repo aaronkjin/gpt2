@@ -74,7 +74,6 @@ class ParaphraseGPT(nn.Module):
     ### YOUR CODE HERE
     outputs = self.gpt(input_ids, attention_mask)
     last_token_hidden = outputs['last_token']
-    
     logits = self.paraphrase_detection_head(last_token_hidden)
     
     return logits
