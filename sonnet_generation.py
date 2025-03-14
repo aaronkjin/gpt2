@@ -96,8 +96,8 @@ class SonnetGPT(nn.Module):
     line_count = 3  # We assume we start with the first 3 lines provided
     
     # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.99  # Slightly lower for middle quatrains 0.95
-    final_couplet_temp = temperature * 0.95    # Even lower for final couplet for more focus 0.9
+    middle_quatrains_temp = temperature * 0.95  # Lower for middle quatrains
+    final_couplet_temp = temperature * 0.9    # Even lower for final couplet
     
     # Generate new tokens
     for _ in range(max_length):
@@ -147,7 +147,9 @@ class SonnetGPT(nn.Module):
           line_count += 1
     
     # Return generated sonnet
-    generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+    #generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+    generated_output = self.tokenizer.decode(token_ids[0, prompt_len:].cpu().numpy().tolist())
+
 
     return token_ids, generated_output
 
@@ -264,7 +266,7 @@ def get_args():
   parser.add_argument("--use_gpu", action='store_true')
 
   # Generation parameters.
-  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.2)
+  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.0)
   parser.add_argument("--top_p", type=float, help="Cumulative probability distribution for nucleus sampling.",
                       default=0.9)
 
