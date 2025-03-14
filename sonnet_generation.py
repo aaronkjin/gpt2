@@ -275,7 +275,7 @@ def get_args():
   parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets.txt")
 
   parser.add_argument("--seed", type=int, default=11711)
-  parser.add_argument("--epochs", type=int, default=7)
+  parser.add_argument("--epochs", type=int, default=9)
   parser.add_argument("--use_gpu", action='store_true')
 
   # Generation parameters.
