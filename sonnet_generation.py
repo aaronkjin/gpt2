@@ -10,6 +10,7 @@ trains your SonnetGPT model and writes the required submission files.
 import argparse
 import random
 import torch
+import math
 
 import numpy as np
 import torch.nn.functional as F
@@ -55,7 +56,7 @@ class SonnetGPT(nn.Module):
     # Instead of fine-tuning the full model, freeze lower layers and only fine-tune the top transformer block and lm_head.
     # Assuming self.gpt.h is the list of transformer blocks.
     for i, block in enumerate(self.gpt.gpt_layers):
-      if i < len(self.gpt.gpt_layers) - 2:  # Freeze all but the last 2 blocks
+      if i < len(self.gpt.gpt_layers) - 1:  # Freeze all but the last block
         for param in block.parameters():
           param.requires_grad = False
 
@@ -67,7 +68,7 @@ class SonnetGPT(nn.Module):
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
     # NEW: Apply dropout regularization to the hidden states.
-    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
+    hidden_states = F.dropout(hidden_states, p=0.1, training=self.training)
     #logits = self.lm_head(hidden_states)
     logits = self.gpt.hidden_state_to_token(hidden_states)
     return logits
@@ -135,7 +136,7 @@ class SonnetGPT(nn.Module):
           target_rhyme = rhyme_map[rhyme_pattern[current_line_index]]
           candidate_ids = self.get_rhyme_token_ids(target_rhyme)
           for cid in candidate_ids:
-            logits_last_token[0, cid] += 3.0  # Boost factor (tunable)
+            logits_last_token[0, cid] += 2.0  # Boost factor (tunable)
         # ---------------------------------
 
         if do_sample:
@@ -272,7 +273,6 @@ def train(args):
 
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
-  scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=2, verbose=True)
 
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
@@ -302,7 +302,6 @@ def train(args):
 
     train_loss = train_loss / num_batches
     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
-    scheduler.step(train_loss)
     print('Generating several output sonnets...')
     model.eval()
     for batch in held_out_sonnet_dataset:
