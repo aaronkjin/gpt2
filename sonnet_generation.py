@@ -22,9 +22,7 @@ from transformers import GPT2Tokenizer
 from einops import rearrange
 from evaluation import test_sonnet
 
-from datasets import (
-  SonnetsDataset,
-)
+from datasets import SonnetsDataset
 from models.gpt2 import GPT2Model
 
 from optimizer import AdamW
