@@ -32,8 +32,8 @@ TQDM_DISABLE = False
 
 # Fix the random seed.
 def seed_everything(seed=11711):
-  random.seed(seed)
   np.random.seed(seed)
+  random.seed(seed)
   torch.manual_seed(seed)
   torch.cuda.manual_seed(seed)
   torch.cuda.manual_seed_all(seed)
