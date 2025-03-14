@@ -255,14 +255,14 @@ def save_model(model, optimizer, args, filepath):
 
 
 def train(args):
-  """Train GPT-2 for paraphrase detection on the Quora dataset."""
+  """Train GPT-2 for sonnet generation."""
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
   # Create the data and its corresponding datasets and dataloader.
   sonnet_dataset = SonnetsDataset(args.sonnet_path)
   sonnet_dataloader = DataLoader(sonnet_dataset, shuffle=True, batch_size=args.batch_size,
                                  collate_fn=sonnet_dataset.collate_fn)
 
-  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
+  # Create the held-out dataset: these only have the first 3 lines.
   held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
 
   args = add_arguments(args)
@@ -272,6 +272,10 @@ def train(args):
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
 
+  # --- Scheduler Setup ---
+  # Using CosineAnnealingLR with T_max equal to the number of epochs.
+  scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-7)
+
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
     model.train()
@@ -279,17 +283,15 @@ def train(args):
     num_batches = 0
 
     for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-      # Get the input and move it to the gpu (I do not recommend training this model on CPU).
       b_ids, b_mask = batch['token_ids'], batch['attention_mask']
       b_ids = b_ids.to(device)
       b_mask = b_mask.to(device)
 
-      # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
-      labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
-      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1) #ELI ADDED LABEL SMOOTHING
+      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+      labels = b_ids[:, 1:].contiguous().flatten()
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
       loss.backward()
 
       torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -298,8 +300,13 @@ def train(args):
       train_loss += loss.item()
       num_batches += 1
 
+    # Step the scheduler at the end of the epoch.
+    scheduler.step()
+    current_lr = scheduler.get_last_lr()[0]
+    
     train_loss = train_loss / num_batches
-    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
+    print(f"Epoch {epoch}: train loss :: {train_loss:.3f}, learning rate :: {current_lr:.7f}.")
+
     print('Generating several output sonnets...')
     model.eval()
     for batch in held_out_sonnet_dataset:
@@ -307,7 +314,6 @@ def train(args):
       output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
       print(f'{batch[1]}{output[1]}\n\n')
 
-    # TODO: consider a stopping condition to prevent overfitting on the small dataset of sonnets.
     save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
 
