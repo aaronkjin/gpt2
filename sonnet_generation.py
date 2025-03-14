@@ -57,7 +57,7 @@ class SonnetGPT(nn.Module):
       if "h." in name:
         # Extract the block index from the parameter name (e.g., "h.3.attn.c_attn.weight")
         block_index = int(name.split('.')[1])
-        if block_index < args.l - 1:  # Freeze all blocks except the last transformer block.
+        if block_index < args.l - args.unfrozen_blocks:  # Freeze all blocks except the last transformer block.
           param.requires_grad = False
         else:
           param.requires_grad = True
@@ -286,6 +286,9 @@ def get_args():
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
   parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
                       choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
+  #Below added for finetuning
+  parser.add_argument("--unfrozen_blocks", type=int, help="Number of transformer blocks to fine-tune"
+                      " (from the end)", default=2)
 
   args = parser.parse_args()
   return args
