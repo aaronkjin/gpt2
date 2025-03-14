@@ -55,7 +55,7 @@ class SonnetGPT(nn.Module):
     # Instead of fine-tuning the full model, freeze lower layers and only fine-tune the top transformer block and lm_head.
     # Assuming self.gpt.h is the list of transformer blocks.
     for i, block in enumerate(self.gpt.gpt_layers):
-      if i < len(self.gpt.gpt_layers) - 1:  # Freeze all but the last block
+      if i < len(self.gpt.gpt_layers) - 2:  # Freeze all but the last 2 blocks
         for param in block.parameters():
           param.requires_grad = False
 
@@ -67,7 +67,7 @@ class SonnetGPT(nn.Module):
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
     # NEW: Apply dropout regularization to the hidden states.
-    hidden_states = F.dropout(hidden_states, p=0.1, training=self.training)
+    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
     logits = self.lm_head(hidden_states)
     return logits
     
