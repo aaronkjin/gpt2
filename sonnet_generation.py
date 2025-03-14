@@ -62,9 +62,9 @@ class SonnetGPT(nn.Module):
     """
     ### YOUR CODE HERE
     hidden_states = outputs["last_hidden_state"]
-    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
-    logits = self.gpt.hidden_state_to_token(hidden_states)
-    return logits
+    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
+    logits = self.gpt.hidden_state_to_token(hidden_states)
+    return logits
 
 
   def get_device(self):
