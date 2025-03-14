@@ -61,6 +61,7 @@ class SonnetGPT(nn.Module):
     not just the distribution over next tokens for the last token!
     """
     ### YOUR CODE HERE
+    outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
     hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
     logits = self.gpt.hidden_state_to_token(hidden_states)
