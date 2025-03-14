@@ -99,11 +99,18 @@ class SonnetGPT(nn.Module):
     """
     Prepare sonnet text with special tokens and optional truncation to first n lines.
     """
+    if text is None or text.strip() == "":
+      # Handle empty inputs
+      return "[SONNET_START] [SONNET_END]"
+      
+    # Process line limitations if needed
     if first_n_lines is not None:
         lines = text.split('\n')
         if len(lines) >= first_n_lines:
             text = '\n'.join(lines[:first_n_lines])
     
+    # Strip extra whitespace and add special tokens
+    text = text.strip()
     prepared_text = f'[SONNET_START] {text} [SONNET_END]'
     return prepared_text
 
@@ -222,11 +229,8 @@ class SonnetGPT(nn.Module):
     input_ids = encoding.to(device)
     generated = input_ids.clone()
     
-    # Get the position where we should start generating (after the 3 lines)
-    # Determine ending positions of the 3 lines by finding line breaks
-    n_lines_to_keep = 3
-    line_break_token = self.tokenizer.encode('\n', return_tensors='pt')[0, 1]
-    
+    # We don't need to track line breaks here since we're just generating tokens sequentially
+    # Focus on the generation loop
     for step in range(max_length):
         # Create attention mask
         attention_mask = torch.ones(generated.shape, dtype=torch.int64).to(device)
@@ -343,6 +347,10 @@ def train(args):
             # Format with special tokens
             processed_text = model.prepare_sonnet_text(full_sonnet)
             processed_sonnets.append(processed_text)
+        
+        # Skip if we couldn't process any sonnets
+        if not processed_sonnets:
+          continue
       else:
         # Full sonnet training
         processed_sonnets = [model.prepare_sonnet_text(sonnet) for sonnet in original_sonnets]
@@ -374,7 +382,7 @@ def train(args):
       total_loss += loss.item()
       batch_count += 1
     
-    avg_train_loss = total_loss / batch_count
+    avg_train_loss = total_loss / batch_count if batch_count > 0 else float('inf')
     print(f"[Epoch {epoch}] Train loss: {avg_train_loss:.3f}, LR: {scheduler.get_last_lr()[0]:.6f}")
     
     # Generate sample sonnets during training
@@ -388,28 +396,36 @@ def train(args):
       # Get the first 3 lines for generation
       sonnet_text = batch[1]
       lines = sonnet_text.strip().split('\n')
-      if len(lines) >= 3:
-        first_3_lines = '\n'.join(lines[:3])
+      
+      # Make sure we have at least one line
+      first_lines = sonnet_text
+      if len(lines) >= 1:
+        # Use as many lines as available, up to 3
+        num_lines = min(3, len(lines))
+        first_lines = '\n'.join(lines[:num_lines])
         
         # Prepare input for the model with special tokens
-        prepared_input = model.prepare_sonnet_text(first_3_lines, first_n_lines=3)
+        prepared_input = model.prepare_sonnet_text(first_lines)
         encoding = model.tokenizer(prepared_input, return_tensors='pt', padding=True, truncation=True).to(device)
         
-        # Generate continuation
-        _, output = model.generate(
-            encoding['input_ids'],
-            temperature=args.temperature,
-            top_p=args.top_p,
-            max_length=200  # Longer max_length for complete sonnets
-        )
-        
-        # Clean up output for display
-        generated_text = output[0].replace('[SONNET_START]', '').replace('[SONNET_END]', '').strip()
-        
-        print(f"\nSample {i}:")
-        print(f"First 3 lines:\n{first_3_lines}\n")
-        print(f"Full generated sonnet:\n{generated_text}\n")
-        print("-" * 50)
+        try:
+          # Generate continuation
+          _, output = model.generate(
+              encoding['input_ids'],
+              temperature=args.temperature,
+              top_p=args.top_p,
+              max_length=200  # Longer max_length for complete sonnets
+          )
+          
+          # Clean up output for display
+          generated_text = output[0].replace('[SONNET_START]', '').replace('[SONNET_END]', '').strip()
+          
+          print(f"\nSample {i}:")
+          print(f"First lines:\n{first_lines}\n")
+          print(f"Full generated sonnet:\n{generated_text}\n")
+          print("-" * 50)
+        except Exception as e:
+          print(f"Error generating sample {i}: {e}")
     
     # Save checkpoint if it's the best model so far
     if avg_train_loss < best_loss:
@@ -447,7 +463,7 @@ def generate_submission_sonnets(args):
   model = model.to(device)
   model.eval()
 
-  # Load the held-out dataset containing first 3 lines of test sonnets
+  # Load the held-out dataset containing first lines of test sonnets
   held_out_dataset = SonnetsDataset(args.held_out_sonnet_path)
   
   # Parameters that gave the best results during our grid search
@@ -480,13 +496,17 @@ def generate_submission_sonnets(args):
         sonnet_id = batch[0]
         sonnet_text = batch[1]
         
-        # Extract the first 3 lines for conditioning
+        # Extract the available lines for conditioning
         lines = sonnet_text.strip().split('\n')
-        if len(lines) >= 3:
-          first_3_lines = '\n'.join(lines[:3])
+        
+        # Make sure we have at least one line to continue from
+        if len(lines) >= 1:
+          # Use available lines, up to 3
+          num_lines_to_use = min(3, len(lines))
+          first_lines = '\n'.join(lines[:num_lines_to_use])
           
           # Prepare the input with special tokens
-          prepared_input = model.prepare_sonnet_text(first_3_lines, first_n_lines=3)
+          prepared_input = model.prepare_sonnet_text(first_lines)
           encoding = model.tokenizer(prepared_input, return_tensors='pt', padding=True, truncation=True)
           
           # Remove the last token if it is EOS to prevent early stopping
@@ -496,16 +516,8 @@ def generate_submission_sonnets(args):
           
           encoding = encoding.to(device)
           
-          # Try generating with different random seeds for more diversity
-          best_generation = None
-          best_generation_score = -1
-          
-          # Generate multiple samples and pick the best one
-          for seed in range(3):
-            # Set seed for reproducibility within this generation
-            torch.manual_seed(seed)
-            
-            # Generate continuation using temperature and top_p sampling
+          try:
+            # Generate continuation
             _, generated = model.generate(
                 encoding['input_ids'], 
                 temperature=temp,
@@ -517,38 +529,18 @@ def generate_submission_sonnets(args):
             # Clean up output - remove special tokens and keep only what we need
             generated_text = generated[0].replace('[SONNET_START]', '').replace('[SONNET_END]', '').strip()
             
-            # Try to evaluate this specific generation if we can
-            if len(held_out_dataset) <= 5:  # Only for very small test sets
-              # Create temporary file with just this sonnet
-              with open("predictions/temp_single_sonnet.txt", "w+") as f:
-                f.write("--Generated Sonnets--\n\n")
-                f.write(f"\n{sonnet_id}\n")
-                f.write(f"{generated_text}\n\n")
-              
-              try:
-                # Score this individual generation
-                single_score = test_sonnet(
-                    test_path="predictions/temp_single_sonnet.txt",
-                    gold_path=args.held_out_sonnet_path
-                )
-                if single_score > best_generation_score:
-                  best_generation_score = single_score
-                  best_generation = generated_text
-              except:
-                # If scoring fails, just use the first generation
-                if best_generation is None:
-                  best_generation = generated_text
-            else:
-              # For larger test sets, just use the first generation
-              best_generation = generated_text
-              break
-          
-          # Use the best generation we found
-          full_sonnet = f'{best_generation}\n\n'
-          current_generated.append((sonnet_id, full_sonnet))
+            # Save the generated sonnet
+            full_sonnet = f'{generated_text}\n\n'
+            current_generated.append((sonnet_id, full_sonnet))
+            print(f"Generated for {sonnet_id}")
+          except Exception as e:
+            print(f"Error generating for {sonnet_id}: {e}")
+            # In case of error, use the input as output to avoid breaking
+            full_sonnet = f'{first_lines}\n\n'
+            current_generated.append((sonnet_id, full_sonnet))
       
       # If we have multiple parameter combinations to try, evaluate them
-      if len(temp_to_try) > 1 and len(top_p_to_try) > 1:
+      if len(temp_to_try) > 1 and len(top_p_to_try) > 1 and current_generated:
         # Write temp sonnets to a file for evaluation
         with open("predictions/temp_generated_sonnets.txt", "w+") as f:
           f.write("--Generated Sonnets--\n\n")
@@ -578,7 +570,7 @@ def generate_submission_sonnets(args):
         best_generated = current_generated
   
   # Use the best parameters we found
-  if len(temp_to_try) > 1 and len(top_p_to_try) > 1:
+  if len(temp_to_try) > 1 and len(top_p_to_try) > 1 and best_generated:
     print(f"Best parameters: temperature={best_temp}, top_p={best_top_p}, score={best_score}")
     generated_sonnets = best_generated
   else:
