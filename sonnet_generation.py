@@ -94,8 +94,8 @@ class SonnetGPT(nn.Module):
     line_count = 3  # We assume we start with the first 3 lines provided
     
     # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.95  # Slightly lower for middle quatrains
-    final_couplet_temp = temperature * 0.9     # Even lower for final couplet for more focus
+    middle_quatrains_temp = temperature * 0.85  # Slightly lower for middle quatrains
+    final_couplet_temp = temperature * 0.75     # Even lower for final couplet for more focus
     
     # Generate new tokens
     for _ in range(max_length):
