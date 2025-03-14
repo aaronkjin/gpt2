@@ -73,7 +73,7 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=128):
+  def generate(self, encoding, temperature=0.7, top_p=0.8, max_length=128):
     """
     Generates an original sonnet using top-p sampling and softmax temperature.
 
@@ -94,8 +94,8 @@ class SonnetGPT(nn.Module):
     line_count = 3  # We assume we start with the first 3 lines provided
     
     # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.85  # Slightly lower for middle quatrains
-    final_couplet_temp = temperature * 0.75     # Even lower for final couplet for more focus
+    middle_quatrains_temp = temperature * 0.95  # Slightly lower for middle quatrains
+    final_couplet_temp = temperature * 0.9    # Even lower for final couplet for more focus
     
     # Generate new tokens
     for _ in range(max_length):
