@@ -96,8 +96,8 @@ class SonnetGPT(nn.Module):
     line_count = 3  # We assume we start with the first 3 lines provided
     
     # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.95  # Slightly lower for middle quatrains
-    final_couplet_temp = temperature * 0.9    # Even lower for final couplet for more focus
+    middle_quatrains_temp = temperature * 0.99  # Slightly lower for middle quatrains 0.95
+    final_couplet_temp = temperature * 0.95    # Even lower for final couplet for more focus 0.9
     
     # Generate new tokens
     for _ in range(max_length):
@@ -113,15 +113,10 @@ class SonnetGPT(nn.Module):
       
       logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
       
-      #generated_tokens = token_ids[0].tolist()
-      #penalty = 1.2
-      #for token in set(generated_tokens):
-        #logits_last_token[0, token] /= penalty
-      
       # Convert logits to probabilities
       probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
       
-      # Top-p (nucleus) sampling
+      # Top-p sampling
       sorted_probs, sorted_indices = torch.sort(probs, descending=True)
       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
       top_p_mask = cumulative_probs <= top_p
@@ -134,7 +129,7 @@ class SonnetGPT(nn.Module):
       sampled_index = torch.multinomial(filtered_probs, 1)
       sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
       
-      # Stop if end-of-sequence token is reached or we've generated all 14 lines
+      # Stop generating if 14 lines reached or EOS token generated
       if sampled_token.item() == self.tokenizer.eos_token_id or current_newlines >= initial_newlines + 14:
         break
       
@@ -144,16 +139,15 @@ class SonnetGPT(nn.Module):
         [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
       )
       
-      # Update line count if we generated a newline token
+      # Update line count
       token_str = self.tokenizer.decode([sampled_token.item()])
       if '\n' in token_str:
         current_newlines += 1
         if current_newlines > initial_newlines:
           line_count += 1
     
-    # Decode and return the generated sonnet
-    #generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
-    generated_output = self.tokenizer.decode(token_ids[0, prompt_len:].cpu().numpy().tolist())
+    # Return generated sonnet
+    generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
 
     return token_ids, generated_output
 
