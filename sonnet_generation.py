@@ -10,7 +10,6 @@ trains your SonnetGPT model and writes the required submission files.
 import argparse
 import random
 import torch
-import math
 
 import numpy as np
 import torch.nn.functional as F
@@ -20,7 +19,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 from einops import rearrange
-from evaluation import test_sonnet
 
 from datasets import (
   SonnetsDataset,
@@ -51,28 +49,23 @@ class SonnetGPT(nn.Module):
     self.gpt = GPT2Model.from_pretrained(model=args.model_size, d=args.d, l=args.l, num_heads=args.num_heads)
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
-    self.lm_head = nn.Linear(args.d, self.gpt.config.vocab_size, bias=False) # remove for logits
 
-    # Instead of fine-tuning the full model, freeze lower layers and only fine-tune the top transformer block and lm_head.
-    # Assuming self.gpt.h is the list of transformer blocks.
-    for i, block in enumerate(self.gpt.gpt_layers):
-      if i < len(self.gpt.gpt_layers) - 1:  # Freeze all but the last block
-        for param in block.parameters():
-          param.requires_grad = False
-
-    # Optionally freeze the token embeddings.
-    for param in self.gpt.word_embedding.parameters():
-      param.requires_grad = False
+    # By default, fine-tune the full model. TODO: this is maybe not idea.
+    for param in self.gpt.parameters():
+      param.requires_grad = True
 
   def forward(self, input_ids, attention_mask):
+    """
+    This is similar to the forward for ParaphraseGPT, but we now want to produce a logit for each token in our sequence;
+    not just the last token! This will allow our model to learn the natural language distribution that composes sonnets,
+    not just the distribution over next tokens for the last token!
+    """
+    # Get the hidden states for all tokens in the sequence
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
-    # NEW: Apply dropout regularization to the hidden states.
-    hidden_states = F.dropout(hidden_states, p=0.1, training=self.training)
-    logits = self.lm_head(hidden_states)
-    #logits = self.gpt.hidden_state_to_token(hidden_states)
+    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
+    logits = self.gpt.hidden_state_to_token(hidden_states)
     return logits
-    
 
 
   def get_device(self):
@@ -80,166 +73,80 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, input_ids, temperature=0.7, top_k=50, top_p=None, beam_width=1, max_length=128, do_sample=True):
+  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=128):
     """
-    Generates an original sonnet using advanced sampling techniques:
+    Generates an original sonnet using top-p sampling and softmax temperature.
+
+    This implementation includes awareness of sonnet structure:
+    - Ensures we generate a complete sonnet (14 lines total, including the provided first 3)
+    - Uses slightly different temperature for different parts of the sonnet
+    - Potentially adjusts sampling parameters based on position in the sonnet
+    """
+    token_ids = encoding.to(self.get_device())
+    attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
     
-    Beam Search: If beam_width > 1, uses beam search with length normalization (exponent=0.7).
-    Top-K Sampling: If do_sample is True and beam_width==1, at each generation step only the top_k tokens are considered.
-    Greedy: If do_sample is False and beam_width==1, picks the highest probability token.
+    # Count initial number of newlines to track how many lines we're starting with
+    initial_text = self.tokenizer.decode(token_ids[0])
+    initial_newlines = initial_text.count('\n')
     
-    Temperature scaling is applied to the logits before sampling.
+    # Keep track of the line count as we generate
+    current_newlines = initial_newlines
+    line_count = 3  # We assume we start with the first 3 lines provided
     
-    NEW MODIFICATIONS:
-      - Enforces a 14-line limit (Shakespearean sonnet format).
-      - Enforces the rhyme scheme (ABABCDCDEFEFGG) by biasing the generation of line endings.
-    """
-    if beam_width > 1:
-      best_seq = self._beam_search_generate(input_ids, temperature, top_k, beam_width, max_length)
-      generated_output = self.tokenizer.decode(best_seq[0].cpu().numpy().tolist())[3:]
-      return best_seq, generated_output
-    else:
-      # --- NEW: Structural Constraints Setup ---
-      max_lines = 14
-      # Identify the newline token id (used to count line breaks)
-      newline_token_id = self.tokenizer.encode("\n", add_special_tokens=False)[0]
-      # Decode the prompt and count how many lines are already present.
-      decoded_prompt = self.tokenizer.decode(input_ids[0].cpu().numpy().tolist())
-      current_line_count = decoded_prompt.count("\n")
-      # Define the Shakespearean rhyme scheme: ABAB CDCDEFEFGG
-      rhyme_pattern = ['A','B','A','B','C','D','C','D','E','F','E','F','G','G']
-      # For lines already in the prompt, extract their ending word to serve as the target rhyme.
-      rhyme_map = {}  # Mapping: rhyme letter -> target ending word.
-      lines = decoded_prompt.split("\n")
-      for i, line in enumerate(lines):
-        if i < max_lines and line.strip():
-          last_word = line.strip().split()[-1]
-          letter = rhyme_pattern[i]
-          if letter not in rhyme_map:
-            rhyme_map[letter] = last_word
-      # ------------------------------------------------
-
-      token_ids = input_ids.to(self.get_device())
-      attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
-
-      while token_ids.shape[1] < max_length:
-        # Forward pass to get logits
-        logits_sequence = self.forward(token_ids, attention_mask)
-        logits_last_token = logits_sequence[:, -1, :] / temperature  # Temperature scaling
-
-        # --- NEW: Rhyme Enforcement ---
-        # Determine which line is being generated (0-indexed)
-        current_line_index = current_line_count  
-        # If the current line has a rhyme requirement (i.e. a previous line with the same rhyme letter exists),
-        # then bias the logits for candidate tokens that rhyme with the target.
-        if current_line_index < max_lines and rhyme_pattern[current_line_index] in rhyme_map:
-          target_rhyme = rhyme_map[rhyme_pattern[current_line_index]]
-          candidate_ids = self.get_rhyme_token_ids(target_rhyme)
-          for cid in candidate_ids:
-            logits_last_token[0, cid] += 2.0  # Boost factor (tunable)
-        # ---------------------------------
-
-        if do_sample:
-          probs = torch.softmax(logits_last_token, dim=-1)
-          if top_p is not None:
-              # Nucleus (top-p) sampling
-              sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-              cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-              # Create a mask for tokens within the cumulative top_p probability.
-              top_p_mask = cumulative_probs <= top_p
-              top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # shift mask
-              top_p_mask[..., 0] = True  # always include the top token
-              filtered_probs = sorted_probs * top_p_mask
-              filtered_probs = filtered_probs / filtered_probs.sum(dim=-1, keepdim=True)
-              sampled_index = torch.multinomial(filtered_probs, 1)
-              sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
-          else:
-              # Top-K sampling as before
-              topk_probs, topk_indices = torch.topk(probs, k=top_k)
-              topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
-              sampled_index = torch.multinomial(topk_probs, 1)
-              sampled_token = topk_indices.gather(dim=-1, index=sampled_index)
-
-        # Stop if EOS token is reached
-        if sampled_token.item() == self.tokenizer.eos_token_id:
-          break
-
-        # Append the sampled token
-        token_ids = torch.cat([token_ids, sampled_token], dim=1)
-        attention_mask = torch.cat(
-          [attention_mask, torch.ones((token_ids.shape[0], 1), dtype=torch.int64).to(self.get_device())],
-          dim=1
-        )
-
-        # --- NEW: Line Count and Rhyme Map Update ---
-        # Check if the generated token is a newline (i.e. end of a line).
-        if sampled_token.item() == newline_token_id:
-          current_line_count += 1
-          decoded_so_far = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())
-          lines_generated = decoded_so_far.split("\n")
-          if len(lines_generated) >= 2:
-            # Get the most recently completed line (the one before the newline)
-            completed_line = lines_generated[-2].strip()
-            if completed_line:
-              last_word = completed_line.split()[-1]
-              letter = rhyme_pattern[current_line_count - 1]
-              # If this is the first occurrence for this rhyme letter, store the target ending.
-              if letter not in rhyme_map:
-                rhyme_map[letter] = last_word
-          # If we have reached the 14-line limit, stop generation.
-          if current_line_count >= max_lines:
-            break
-        # -----------------------------------------------
-      generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
-      return token_ids, generated_output
-
-  def get_rhyme_token_ids(self, target_word):
-    """
-    Dummy implementation to obtain token ids for words that rhyme with target_word.
-    In practice, this should use a rhyming dictionary or phonetic lookup.
-    For demonstration purposes, we simply return the token ids for target_word.
-    """
-    return self.tokenizer.encode(target_word, add_special_tokens=False)
-
-  def _beam_search_generate(self, input_ids, temperature, top_k, beam_width, max_length):
-    """
-    Performs beam search generation. At each step, for every candidate sequence the top_k continuations are 
-    considered and the beams are updated. A length normalization penalty (exponent 0.7) is applied.
-    """
-    beams = [(input_ids.to(self.get_device()), 0.0)]  # Each beam: (sequence, cumulative log probability)
-    completed_beams = []
-    norm_exponent = 0.7
+    # Adjust temperatures for different parts of the sonnet
+    middle_quatrains_temp = temperature * 0.95  # Slightly lower for middle quatrains
+    final_couplet_temp = temperature * 0.9     # Even lower for final couplet for more focus
+    
+    # Generate new tokens
     for _ in range(max_length):
-      new_beams = []
-      for seq, score in beams:
-        # If EOS reached, retain the beam
-        if seq[0, -1].item() == self.tokenizer.eos_token_id:
-          completed_beams.append((seq, score))
-          continue
-        attention_mask = torch.ones(seq.shape, dtype=torch.int64).to(self.get_device())
-        logits = self.forward(seq, attention_mask)
-        logits_last = logits[:, -1, :] / temperature
-        probs = torch.softmax(logits_last, dim=-1)
-        topk_probs, topk_indices = torch.topk(probs, k=top_k)
-        for i in range(top_k):
-          token_prob = topk_probs[0, i].item()
-          token_id = topk_indices[0, i].unsqueeze(0).unsqueeze(0)  # Shape: (1,1)
-          new_seq = torch.cat([seq, token_id], dim=1)
-          new_score = score + math.log(token_prob + 1e-8)  # Accumulate log probability
-          new_beams.append((new_seq, new_score))
-      if not new_beams:
+      # Forward pass to get logits
+      logits_sequence = self.forward(token_ids, attention_mask)
+      
+      # Adjust temperature based on position in sonnet
+      current_temp = temperature
+      if line_count >= 4 and line_count < 12:
+        current_temp = middle_quatrains_temp
+      elif line_count >= 12:
+        current_temp = final_couplet_temp
+      
+      logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
+      
+      # Convert logits to probabilities
+      probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
+      
+      # Top-p (nucleus) sampling
+      sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+      cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+      top_p_mask = cumulative_probs <= top_p
+      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # Shift mask right for proper thresholding
+      top_p_mask[..., 0] = True  # Always include the highest probability token
+      filtered_probs = sorted_probs * top_p_mask  # Zero out unlikely tokens
+      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  # Normalize probabilities
+      
+      # Sample from filtered distribution
+      sampled_index = torch.multinomial(filtered_probs, 1)
+      sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
+      
+      # Stop if end-of-sequence token is reached or we've generated all 14 lines
+      if sampled_token.item() == self.tokenizer.eos_token_id or current_newlines >= initial_newlines + 14:
         break
-      # Sort new beams with length normalization to avoid overly short sequences.
-      new_beams = sorted(new_beams, key=lambda x: x[1] / (x[0].shape[1] ** norm_exponent), reverse=True)
-      beams = new_beams[:beam_width]
-      if all(seq[0, -1].item() == self.tokenizer.eos_token_id for seq, _ in beams):
-        completed_beams.extend(beams)
-        break
-    if completed_beams:
-      best_seq, best_score = max(completed_beams, key=lambda x: x[1] / (x[0].shape[1] ** norm_exponent))
-    else:
-      best_seq, best_score = beams[0]
-    return best_seq
+      
+      # Append sampled token
+      token_ids = torch.cat([token_ids, sampled_token], dim=1)
+      attention_mask = torch.cat(
+        [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
+      )
+      
+      # Update line count if we generated a newline token
+      token_str = self.tokenizer.decode([sampled_token.item()])
+      if '\n' in token_str:
+        current_newlines += 1
+        if current_newlines > initial_newlines:
+          line_count += 1
+    
+    # Decode and return the generated sonnet
+    generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+    return token_ids, generated_output
 
 
 def save_model(model, optimizer, args, filepath):
@@ -291,10 +198,8 @@ def train(args):
       logits = model(b_ids, b_mask)
       logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
       labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
-      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1) #ELI ADDED LABEL SMOOTHING
+      loss = F.cross_entropy(logits, labels, reduction='mean')
       loss.backward()
-
-      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
       optimizer.step()
 
       train_loss += loss.item()
@@ -394,5 +299,3 @@ if __name__ == "__main__":
   seed_everything(args.seed)  # Fix the seed for reproducibility.
   train(args)
   generate_submission_sonnets(args)
-  score = test_sonnet()
-  print("chrF score:", score)
