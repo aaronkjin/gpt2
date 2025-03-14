@@ -67,8 +67,8 @@ class SonnetGPT(nn.Module):
   def forward(self, input_ids, attention_mask):
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
-    # Apply a more targeted dropout and add layer normalization for better regularization
-    hidden_states = F.dropout(hidden_states, p=0.15, training=self.training)
+    # NEW: Apply dropout regularization to the hidden states with increased probability
+    hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
     logits = self.lm_head(hidden_states)
     return logits
     
@@ -275,6 +275,7 @@ class SonnetGPT(nn.Module):
       best_seq, best_score = beams[0]
     return best_seq
 
+
 def save_model(model, optimizer, args, filepath):
   save_info = {
     'model': model.state_dict(),
@@ -324,10 +325,10 @@ def train(args):
       logits = model(b_ids, b_mask)
       logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
       labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
-      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.05)  # Reduced label smoothing
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)  # Increased label smoothing as suggested by Eli
       loss.backward()
 
-      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Lower max_norm for more stable training
+      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)  # Increased max_norm as suggested by Eli
       optimizer.step()
 
       train_loss += loss.item()
@@ -342,7 +343,7 @@ def train(args):
       output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
       print(f'{batch[1]}{output[1]}\n\n')
 
-    # Save checkpoint
+    # TODO: consider a stopping condition to prevent overfitting on the small dataset of sonnets.
     save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
 
@@ -400,12 +401,12 @@ def get_args():
   parser.add_argument("--use_gpu", action='store_true')
 
   # Generation parameters.
-  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.0)  # Lower temperature from 1.2 to 1.0
+  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.2)  # Using Eli's temperature value
   parser.add_argument("--top_p", type=float, help="Cumulative probability distribution for nucleus sampling.",
-                      default=0.92)  # Slightly higher top_p
+                      default=0.9)  # Using Eli's top_p value
 
   parser.add_argument("--batch_size", help='The training batch size.', type=int, default=8)
-  parser.add_argument("--lr", type=float, help="learning rate", default=2e-5)  # Slightly higher learning rate
+  parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)  # Using Eli's learning rate
   parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
                       choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
 
