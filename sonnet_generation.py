@@ -84,6 +84,8 @@ class SonnetGPT(nn.Module):
     """
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
+
+    prompt_len = token_ids.shape[1]
     
     # Count initial number of newlines to track how many lines we're starting with
     initial_text = self.tokenizer.decode(token_ids[0])
@@ -110,11 +112,11 @@ class SonnetGPT(nn.Module):
         current_temp = final_couplet_temp
       
       logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
-
-      generated_tokens = token_ids[0].tolist()
-      penalty = 1.2
-      for token in set(generated_tokens):
-        logits_last_token[0, token] /= penalty
+      
+      #generated_tokens = token_ids[0].tolist()
+      #penalty = 1.2
+      #for token in set(generated_tokens):
+        #logits_last_token[0, token] /= penalty
       
       # Convert logits to probabilities
       probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
@@ -150,7 +152,9 @@ class SonnetGPT(nn.Module):
           line_count += 1
     
     # Decode and return the generated sonnet
-    generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+    #generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
+    generated_output = self.tokenizer.decode(token_ids[0, prompt_len:].cpu().numpy().tolist())
+
     return token_ids, generated_output
 
 
