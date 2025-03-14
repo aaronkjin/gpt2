@@ -73,7 +73,7 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.8, max_length=128):
+  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=128):
     """
     Generates an original sonnet using top-p sampling and softmax temperature.
 
@@ -110,6 +110,11 @@ class SonnetGPT(nn.Module):
         current_temp = final_couplet_temp
       
       logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
+
+      generated_tokens = token_ids[0].tolist()
+      penalty = 1.2
+      for token in set(generated_tokens):
+        logits_last_token[0, token] /= penalty
       
       # Convert logits to probabilities
       probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
