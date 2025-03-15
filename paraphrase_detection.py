@@ -132,8 +132,9 @@ def train(args):
       # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      preds = torch.argmax(logits, dim=1)
-      loss = F.cross_entropy(logits, labels, reduction='mean')
+
+      mapped_labels = (labels == 8505).long()
+      loss = F.cross_entropy(logits, mapped_labels, reduction='mean')
       loss.backward()
       optimizer.step()
 
@@ -199,7 +200,7 @@ def get_args():
   parser.add_argument("--para_test_out", type=str, default="predictions/para-test-output.csv")
 
   parser.add_argument("--seed", type=int, default=11711)
-  parser.add_argument("--epochs", type=int, default=10)
+  parser.add_argument("--epochs", type=int, default=1)
   parser.add_argument("--use_gpu", action='store_true')
 
   parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
