@@ -1,10 +1,6 @@
 '''
-Sonnet generation starter code.
-
-Running:
-  `python sonnet_generation.py --use_gpu`
-
-trains your SonnetGPT model and writes the required submission files.
+Sonnet generation Implementation 
+By Eli Wandless, Brandon Bui, and Aaron Jin
 '''
 
 import argparse
@@ -30,7 +26,7 @@ from optimizer import AdamW
 TQDM_DISABLE = False
 
 
-# Fix the random seed.
+# Random seed.
 def seed_everything(seed=11711):
   random.seed(seed)
   np.random.seed(seed)
@@ -40,39 +36,40 @@ def seed_everything(seed=11711):
   torch.backends.cudnn.benchmark = False
   torch.backends.cudnn.deterministic = True
 
+# LL function, used for DPO extension attempt
 def compute_log_likelihood(model, prompt, continuation, device):
-  # Concatenate prompt and continuation.
+  # concat prompt and continuation.
   full_text = prompt + continuation
   inputs = model.tokenizer(full_text, return_tensors='pt')
   inputs = {k: v.to(device) for k, v in inputs.items()}
-  # Forward pass (no dropout since model is in eval mode).
+  # Forward pass pass (no dropout since model is in eval mode)
   outputs = model(inputs['input_ids'], inputs['attention_mask'])
   logits = outputs  # logits shape: [1, seq_len, vocab_size]
   log_probs = torch.log_softmax(logits, dim=-1)
-  # Determine the number of tokens in the prompt.
+  # Assess # of tokens in  prompt
   prompt_ids = model.tokenizer.encode(prompt, add_special_tokens=False)
   input_ids = inputs['input_ids'][0]
-  # Only compute likelihood for tokens in the continuation.
+  # Compute ll for tokens in the continuation
   ll = 0.0
-  # We start predicting from the position right after the prompt.
+  # Begin predicting from position  after the prompt
   for i in range(len(prompt_ids), input_ids.shape[0] - 1):
-    target_token = input_ids[i+1]  # target token at position i+1
+    target_token = input_ids[i+1]
     ll += log_probs[0, i, target_token]
   return ll
 
 
-# DPO Extension: A simple heuristic to generate a negative continuation by swapping two random lines.
+# Generate bad sonnet helper function for DPO Extension
 def generate_negative(continuation):
     lines = continuation.strip().split('\n')
     if len(lines) > 1:
-        # Swap one randomly chosen pair of adjacent lines.
+        # Swap randomly chosen pair of adjacent lines
         idx = random.randint(0, len(lines) - 2)
         lines[idx], lines[idx + 1] = lines[idx + 1], lines[idx]
         return '\n'.join(lines)
     else:
         words = continuation.split()
         if len(words) > 3:
-            # Swap one pair of adjacent words.
+            # Swap randomly chosen pair of adjacent words
             idx = random.randint(0, len(words) - 2)
             words[idx], words[idx + 1] = words[idx + 1], words[idx]
             return ' '.join(words)
@@ -89,22 +86,10 @@ class SonnetGPT(nn.Module):
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    # By default, fine-tune the full model. TODO: this is maybe not idea.
+    # Fine-tune the full model - Attempted implementations of this for extension but this was best performing version
     for param in self.gpt.parameters():
       param.requires_grad = True
-    """
-    for name, param in self.gpt.named_parameters():
-      if "h." in name:
-        # Extract the block index from the parameter name (e.g., "h.3.attn.c_attn.weight")
-        block_index = int(name.split('.')[1])
-        if block_index < args.l - args.unfrozen_blocks:  # Freeze all blocks except the last transformer block.
-          param.requires_grad = False
-        else:
-          param.requires_grad = True
-      else:
-        # Always fine-tune parameters not in the transformer blocks (e.g. embeddings, layer norms, output projection).
-        param.requires_grad = True
-    """
+    
 
   def forward(self, input_ids, attention_mask):
     """
@@ -139,24 +124,22 @@ class SonnetGPT(nn.Module):
 
     prompt_len = token_ids.shape[1]
     
-    # Count initial number of newlines to track how many lines we're starting with
+    # Count # of newlines to track starting count of lines
     initial_text = self.tokenizer.decode(token_ids[0])
     initial_newlines = initial_text.count('\n')
     
-    # Keep track of the line count as we generate
     current_newlines = initial_newlines
-    line_count = 3  # We assume we start with the first 3 lines provided
+    line_count = 3
     
-    # Adjust temperatures for different parts of the sonnet
+    # Adjust temp for different parts of the sonnet - experimented with this 
     middle_quatrains_temp = temperature * 0.95  # Lower for middle quatrains
     final_couplet_temp = temperature * 0.9    # Even lower for final couplet
     
     # Generate new tokens
     for _ in range(max_length):
-      # Forward pass to get logits
       logits_sequence = self.forward(token_ids, attention_mask)
       
-      # Adjust temperature based on position in sonnet
+      # Adjust temp based on position in sonnet
       current_temp = temperature
       if line_count >= 4 and line_count < 12:
         current_temp = middle_quatrains_temp
@@ -173,7 +156,7 @@ class SonnetGPT(nn.Module):
       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
       top_p_mask = cumulative_probs <= top_p
       top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # Shift mask right for proper thresholding
-      top_p_mask[..., 0] = True  # Always include the highest probability token
+      top_p_mask[..., 0] = True 
       filtered_probs = sorted_probs * top_p_mask  # Zero out unlikely tokens
       filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  # Normalize probabilities
       
@@ -199,10 +182,7 @@ class SonnetGPT(nn.Module):
           line_count += 1
     
     # Return generated sonnet
-    #generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     generated_output = self.tokenizer.decode(token_ids[0, prompt_len:].cpu().numpy().tolist())
-
-
     return token_ids, generated_output
 
 
@@ -219,95 +199,6 @@ def save_model(model, optimizer, args, filepath):
   torch.save(save_info, filepath)
   print(f"save the model to {filepath}")
 
-
-"""def train(args):
-  Train GPT-2 for paraphrase detection on the Quora dataset.
-  device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  # Create the data and its corresponding datasets and dataloader.
-  sonnet_dataset = SonnetsDataset(args.sonnet_path)
-  sonnet_dataloader = DataLoader(sonnet_dataset, shuffle=True, batch_size=args.batch_size,
-                                 collate_fn=sonnet_dataset.collate_fn)
-
-  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
-  held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
-
-  args = add_arguments(args)
-  model = SonnetGPT(args)
-  model = model.to(device)
-
-  lr = args.lr
-  optimizer = AdamW(model.parameters(), lr=lr)
-
-  #DPO Extenstion
-  if args.dpo_mode:
-    ref_model = SonnetGPT(args)
-    ref_model = ref_model.to(device)
-    for param in ref_model.parameters():
-      param.requires_grad = False
-    ref_model.eval()
-
-  for epoch in range(args.epochs):
-    model.train()
-    epoch_loss = 0.0
-    num_samples = 0
-
-    if args.dpo_mode:
-      # DPO training loop.
-      for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch} (DPO)', disable=TQDM_DISABLE):
-        optimizer.zero_grad()
-        batch_loss = 0.0
-        # Process each sample in the batch individually.
-        b_ids, _ = batch['token_ids'], batch['attention_mask']
-        for sample_ids in b_ids:
-          # Decode sample to text.
-          full_text = model.tokenizer.decode(sample_ids)
-          lines = full_text.strip().split('\n')
-          if len(lines) < 4:
-            continue  # Skip if not enough lines.
-          prompt = '\n'.join(lines[:3]) + '\n'
-          winning = '\n'.join(lines[3:])
-          losing = generate_negative(winning)
-          # Compute log-likelihoods.
-          LL_theta_win = compute_log_likelihood(model, prompt, winning, device)
-          LL_theta_loss = compute_log_likelihood(model, prompt, losing, device)
-          LL_ref_win = compute_log_likelihood(ref_model, prompt, winning, device)
-          LL_ref_loss = compute_log_likelihood(ref_model, prompt, losing, device)
-          diff = (LL_theta_win - LL_ref_win) - (LL_theta_loss - LL_ref_loss)
-          sample_loss = -torch.log(torch.sigmoid(args.beta * diff) + 1e-8)
-          batch_loss += sample_loss
-          num_samples += 1
-        if num_samples > 0:
-          batch_loss = batch_loss / num_samples
-          batch_loss.backward()
-          optimizer.step()
-          epoch_loss += batch_loss.item()
-      avg_loss = epoch_loss / (len(sonnet_dataloader) if len(sonnet_dataloader) > 0 else 1)
-      print(f"Epoch {epoch} (DPO): avg loss = {avg_loss:.3f}.")
-    else:
-      # Original cross-entropy training loop.
-      for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-        b_ids, b_mask = batch['token_ids'], batch['attention_mask']
-        b_ids = b_ids.to(device)
-        b_mask = b_mask.to(device)
-        optimizer.zero_grad()
-        logits = model(b_ids, b_mask)
-        logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
-        labels = b_ids[:, 1:].contiguous().flatten()
-        loss = F.cross_entropy(logits, labels, reduction='mean')
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-        num_samples += 1
-      avg_loss = epoch_loss / num_samples
-      print(f"Epoch {epoch}: train loss = {avg_loss:.3f}.")
-
-    print('Generating several output sonnets...')
-    model.eval()
-    for batch in held_out_sonnet_dataset:
-      encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
-      output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
-      print(f'{batch[1]}{output[1]}\n\n')
-    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')"""
 
 def train(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
@@ -336,7 +227,7 @@ def train(args):
         epoch_loss = 0.0
         num_samples = 0
 
-        # If DPO mode is enabled and we are in the staged period, run pure CE training.
+        # If DPO mode is enabled and we are in the staged period, run original CE training
         if args.dpo_mode and epoch < args.staged_dpo_epochs:
             for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch} (Staged CE)', disable=TQDM_DISABLE):
                 b_ids, b_mask = batch['token_ids'], batch['attention_mask']
@@ -361,7 +252,6 @@ def train(args):
             for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch} (Combined)', disable=TQDM_DISABLE):
                 optimizer.zero_grad()
                 batch_dpo_loss = 0.0
-                # Compute CE loss over the batch.
                 b_ids, b_mask = batch['token_ids'], batch['attention_mask']
                 b_ids = b_ids.to(device)
                 b_mask = b_mask.to(device)
@@ -371,12 +261,12 @@ def train(args):
                 ce_loss = F.cross_entropy(logits_ce, labels, reduction='mean')
                 ce_loss_total += ce_loss.item()
 
-                # Compute DPO loss sample-by-sample.
+                # Compute DPO loss
                 for sample_ids in b_ids:
                     full_text = model.tokenizer.decode(sample_ids)
                     lines = full_text.strip().split('\n')
                     if len(lines) < 4:
-                        continue  # Skip if not enough lines.
+                        continue
                     prompt = '\n'.join(lines[:3]) + '\n'
                     winning = '\n'.join(lines[3:])
                     losing = generate_negative(winning)
@@ -394,7 +284,7 @@ def train(args):
                     batch_dpo_loss = 0.0
                 dpo_loss_total += batch_dpo_loss.item()
 
-                # Combine losses.
+                # Combine and report losses
                 combined_loss = args.mix_ratio * ce_loss + (1 - args.mix_ratio) * batch_dpo_loss
                 combined_loss.backward()
                 optimizer.step()
@@ -402,7 +292,7 @@ def train(args):
             avg_dpo_loss = dpo_loss_total / len(sonnet_dataloader)
             print(f"Epoch {epoch} (Combined): avg CE loss = {avg_ce_loss:.3f}, avg DPO loss = {avg_dpo_loss:.3f}.")
         else:
-            # Original cross-entropy training loop (if dpo_mode is not enabled).
+            # Original cross-entropy training loop (from pre-extension, used if no dpo_mode flag)
             for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
                 b_ids, b_mask = batch['token_ids'], batch['attention_mask']
                 b_ids = b_ids.to(device)
@@ -479,10 +369,12 @@ def get_args():
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
   parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
                       choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
+  
   #Below added for finetuning
   parser.add_argument("--unfrozen_blocks", type=int, help="Number of transformer blocks to fine-tune"
                       " (from the end)", default=2)
-  #DPO Extension
+  
+  #DPO Extension params
   parser.add_argument("--dpo_mode", action='store_true', help="Enable Direct Preference Optimization training.")
   parser.add_argument("--beta", type=float, default=1.0, help="Beta scaling parameter for DPO loss.")
   parser.add_argument("--mix_ratio", type=float, default=0.5, help="Mix ratio between CE loss and DPO loss. 1.0 = pure CE; 0.0 = pure DPO.")
