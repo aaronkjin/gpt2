@@ -33,8 +33,6 @@ from models.gpt2 import GPT2Model
 from optimizer import AdamW
 
 TQDM_DISABLE = False
-
-# Fix the random seed.
 def seed_everything(seed=11711):
   random.seed(seed)
   np.random.seed(seed)
@@ -51,9 +49,7 @@ class ParaphraseGPT(nn.Module):
   def __init__(self, args):
     super().__init__()
     self.gpt = GPT2Model.from_pretrained(model=args.model_size, d=args.d, l=args.l, num_heads=args.num_heads)
-    self.paraphrase_detection_head = nn.Linear(args.d, 2)  # Paraphrase detection has two outputs: 1 (yes) or 0 (no).
-
-    # By default, fine-tune the full model.
+    self.paraphrase_detection_head = nn.Linear(args.d, 2)  
     for param in self.gpt.parameters():
       param.requires_grad = True
 
@@ -97,7 +93,6 @@ def save_model(model, optimizer, args, filepath):
 def train(args):
   """Train GPT-2 for paraphrase detection on the Quora dataset."""
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  # Create the data and its corresponding datasets and dataloader.
   para_train_data = load_paraphrase_data(args.para_train)
   para_dev_data = load_paraphrase_data(args.para_dev)
 
@@ -117,20 +112,15 @@ def train(args):
   optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.)
   best_dev_acc = 0
 
-
-  # Run for the specified number of epochs.
   for epoch in range(args.epochs):
     model.train()
     train_loss = 0
     num_batches = 0
     for batch in tqdm(para_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-      # Get the input and move it to the gpu (I do not recommend training this model on CPU).
       b_ids, b_mask, labels = batch['token_ids'], batch['attention_mask'], batch['labels'].flatten()
       b_ids = b_ids.to(device)
       b_mask = b_mask.to(device)
       labels = labels.to(device)
-
-      # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
       preds = torch.argmax(logits, dim=1)
@@ -234,7 +224,7 @@ def add_arguments(args):
 
 if __name__ == "__main__":
   args = get_args()
-  args.filepath = f'{args.epochs}-{args.lr}-paraphrase.pt'  # Save path.
-  seed_everything(args.seed)  # Fix the seed for reproducibility.
+  args.filepath = f'{args.epochs}-{args.lr}-paraphrase.pt'  
+  seed_everything(args.seed) 
   train(args)
   test(args)

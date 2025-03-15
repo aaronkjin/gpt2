@@ -60,7 +60,6 @@ class SonnetGPT(nn.Module):
     not just the last token! This will allow our model to learn the natural language distribution that composes sonnets,
     not just the distribution over next tokens for the last token!
     """
-    # Get the hidden states for all tokens in the sequence
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
     hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
@@ -84,67 +83,42 @@ class SonnetGPT(nn.Module):
     """
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
-    
-    # Count initial number of newlines to track how many lines we're starting with
     initial_text = self.tokenizer.decode(token_ids[0])
     initial_newlines = initial_text.count('\n')
-    
-    # Keep track of the line count as we generate
     current_newlines = initial_newlines
-    line_count = 3  # We assume we start with the first 3 lines provided
-    
-    # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.95  # Slightly lower for middle quatrains
-    final_couplet_temp = temperature * 0.9     # Even lower for final couplet for more focus
-    
-    # Generate new tokens
+    line_count = 3  
+    middle_quatrains_temp = temperature * 0.95  
+    final_couplet_temp = temperature * 0.9     
     for _ in range(max_length):
-      # Forward pass to get logits
       logits_sequence = self.forward(token_ids, attention_mask)
-      
-      # Adjust temperature based on position in sonnet
       current_temp = temperature
       if line_count >= 4 and line_count < 12:
         current_temp = middle_quatrains_temp
       elif line_count >= 12:
         current_temp = final_couplet_temp
       
-      logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
-      
-      # Convert logits to probabilities
+      logits_last_token = logits_sequence[:, -1, :] / current_temp  
       probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
-      
-      # Top-p (nucleus) sampling
       sorted_probs, sorted_indices = torch.sort(probs, descending=True)
       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
       top_p_mask = cumulative_probs <= top_p
-      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # Shift mask right for proper thresholding
-      top_p_mask[..., 0] = True  # Always include the highest probability token
-      filtered_probs = sorted_probs * top_p_mask  # Zero out unlikely tokens
-      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  # Normalize probabilities
-      
-      # Sample from filtered distribution
+      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  
+      top_p_mask[..., 0] = True  
+      filtered_probs = sorted_probs * top_p_mask  
+      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  
       sampled_index = torch.multinomial(filtered_probs, 1)
       sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
-      
-      # Stop if end-of-sequence token is reached or we've generated all 14 lines
       if sampled_token.item() == self.tokenizer.eos_token_id or current_newlines >= initial_newlines + 14:
         break
-      
-      # Append sampled token
       token_ids = torch.cat([token_ids, sampled_token], dim=1)
       attention_mask = torch.cat(
         [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
       )
-      
-      # Update line count if we generated a newline token
       token_str = self.tokenizer.decode([sampled_token.item()])
       if '\n' in token_str:
         current_newlines += 1
         if current_newlines > initial_newlines:
           line_count += 1
-    
-    # Decode and return the generated sonnet
     generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     return token_ids, generated_output
 
@@ -166,12 +140,9 @@ def save_model(model, optimizer, args, filepath):
 def train(args):
   """Train GPT-2 for paraphrase detection on the Quora dataset."""
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  # Create the data and its corresponding datasets and dataloader.
   sonnet_dataset = SonnetsDataset(args.sonnet_path)
   sonnet_dataloader = DataLoader(sonnet_dataset, shuffle=True, batch_size=args.batch_size,
                                  collate_fn=sonnet_dataset.collate_fn)
-
-  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
   held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
 
   args = add_arguments(args)
@@ -180,24 +151,19 @@ def train(args):
 
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
-
-  # Run for the specified number of epochs.
   for epoch in range(args.epochs):
     model.train()
     train_loss = 0
     num_batches = 0
 
     for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-      # Get the input and move it to the gpu (I do not recommend training this model on CPU).
       b_ids, b_mask = batch['token_ids'], batch['attention_mask']
       b_ids = b_ids.to(device)
       b_mask = b_mask.to(device)
-
-      # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  # Ignore the last prediction in the sequence.
-      labels = b_ids[:, 1:].contiguous().flatten()  # Ignore the first token to compose the labels.
+      logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')  
+      labels = b_ids[:, 1:].contiguous().flatten()  
       loss = F.cross_entropy(logits, labels, reduction='mean')
       loss.backward()
       optimizer.step()
@@ -228,7 +194,6 @@ def generate_submission_sonnets(args):
   model = model.to(device)
   model.eval()
 
-  # Create the held-out dataset: these only have the first 3 lines. Your job is to fill in the rest!
   held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
 
   generated_sonnets = []
@@ -295,7 +260,7 @@ def add_arguments(args):
 
 if __name__ == "__main__":
   args = get_args()
-  args.filepath = f'{args.epochs}-{args.lr}-sonnet.pt'  # Save path.
-  seed_everything(args.seed)  # Fix the seed for reproducibility.
+  args.filepath = f'{args.epochs}-{args.lr}-sonnet.pt'  
+  seed_everything(args.seed) 
   train(args)
   generate_submission_sonnets(args)
