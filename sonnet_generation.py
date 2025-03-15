@@ -61,21 +61,23 @@ def compute_log_likelihood(model, prompt, continuation, device):
   return ll
 
 
-## A simple heuristic to generate a negative continuation by swapping two random lines.
+# DPO Extension: A simple heuristic to generate a negative continuation by swapping two random lines.
 def generate_negative(continuation):
-  lines = continuation.strip().split('\n')
-  if len(lines) > 1:
-    idx1, idx2 = random.sample(range(len(lines)), 2)
-    lines[idx1], lines[idx2] = lines[idx2], lines[idx1]
-    return '\n'.join(lines)
-  else:
-    # If there is only one line, shuffle its words.
-    words = continuation.split()
-    if len(words) > 1:
-      random.shuffle(words)
-      return ' '.join(words)
+    lines = continuation.strip().split('\n')
+    if len(lines) > 1:
+        # Swap one randomly chosen pair of adjacent lines.
+        idx = random.randint(0, len(lines) - 2)
+        lines[idx], lines[idx + 1] = lines[idx + 1], lines[idx]
+        return '\n'.join(lines)
     else:
-      return continuation
+        words = continuation.split()
+        if len(words) > 3:
+            # Swap one pair of adjacent words.
+            idx = random.randint(0, len(words) - 2)
+            words[idx], words[idx + 1] = words[idx + 1], words[idx]
+            return ' '.join(words)
+        else:
+            return continuation
 
 
 class SonnetGPT(nn.Module):
@@ -218,8 +220,8 @@ def save_model(model, optimizer, args, filepath):
   print(f"save the model to {filepath}")
 
 
-def train(args):
-  """Train GPT-2 for paraphrase detection on the Quora dataset."""
+"""def train(args):
+  Train GPT-2 for paraphrase detection on the Quora dataset.
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
   # Create the data and its corresponding datasets and dataloader.
   sonnet_dataset = SonnetsDataset(args.sonnet_path)
@@ -305,7 +307,125 @@ def train(args):
       encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
       output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
       print(f'{batch[1]}{output[1]}\n\n')
-    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
+    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')"""
+
+def train(args):
+    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+    sonnet_dataset = SonnetsDataset(args.sonnet_path)
+    sonnet_dataloader = DataLoader(sonnet_dataset, shuffle=True, batch_size=args.batch_size,
+                                   collate_fn=sonnet_dataset.collate_fn)
+    held_out_sonnet_dataset = SonnetsDataset(args.held_out_sonnet_path)
+
+    args = add_arguments(args)
+    model = SonnetGPT(args)
+    model = model.to(device)
+
+    lr = args.lr
+    optimizer = AdamW(model.parameters(), lr=lr)
+
+    # DPO Extension: load reference model.
+    if args.dpo_mode:
+        ref_model = SonnetGPT(args)
+        ref_model = ref_model.to(device)
+        for param in ref_model.parameters():
+            param.requires_grad = False
+        ref_model.eval()
+
+    for epoch in range(args.epochs):
+        model.train()
+        epoch_loss = 0.0
+        num_samples = 0
+
+        # If DPO mode is enabled and we are in the staged period, run pure CE training.
+        if args.dpo_mode and epoch < args.staged_dpo_epochs:
+            for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch} (Staged CE)', disable=TQDM_DISABLE):
+                b_ids, b_mask = batch['token_ids'], batch['attention_mask']
+                b_ids = b_ids.to(device)
+                b_mask = b_mask.to(device)
+                optimizer.zero_grad()
+                logits = model(b_ids, b_mask)
+                logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+                labels = b_ids[:, 1:].contiguous().flatten()
+                loss = F.cross_entropy(logits, labels, reduction='mean')
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+                num_samples += 1
+            avg_loss = epoch_loss / num_samples
+            print(f"Epoch {epoch} (Staged CE): train loss = {avg_loss:.3f}.")
+        elif args.dpo_mode:
+            # Combined DPO + CE training.
+            dpo_loss_total = 0.0
+            ce_loss_total = 0.0
+            sample_count = 0
+            for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch} (Combined)', disable=TQDM_DISABLE):
+                optimizer.zero_grad()
+                batch_dpo_loss = 0.0
+                # Compute CE loss over the batch.
+                b_ids, b_mask = batch['token_ids'], batch['attention_mask']
+                b_ids = b_ids.to(device)
+                b_mask = b_mask.to(device)
+                logits = model(b_ids, b_mask)
+                logits_ce = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+                labels = b_ids[:, 1:].contiguous().flatten()
+                ce_loss = F.cross_entropy(logits_ce, labels, reduction='mean')
+                ce_loss_total += ce_loss.item()
+
+                # Compute DPO loss sample-by-sample.
+                for sample_ids in b_ids:
+                    full_text = model.tokenizer.decode(sample_ids)
+                    lines = full_text.strip().split('\n')
+                    if len(lines) < 4:
+                        continue  # Skip if not enough lines.
+                    prompt = '\n'.join(lines[:3]) + '\n'
+                    winning = '\n'.join(lines[3:])
+                    losing = generate_negative(winning)
+                    LL_theta_win = compute_log_likelihood(model, prompt, winning, device)
+                    LL_theta_loss = compute_log_likelihood(model, prompt, losing, device)
+                    LL_ref_win = compute_log_likelihood(ref_model, prompt, winning, device)
+                    LL_ref_loss = compute_log_likelihood(ref_model, prompt, losing, device)
+                    diff = (LL_theta_win - LL_ref_win) - (LL_theta_loss - LL_ref_loss)
+                    sample_loss = -torch.log(torch.sigmoid(args.beta * diff) + 1e-8)
+                    batch_dpo_loss += sample_loss
+                    sample_count += 1
+                if sample_count > 0:
+                    batch_dpo_loss = batch_dpo_loss / sample_count
+                else:
+                    batch_dpo_loss = 0.0
+                dpo_loss_total += batch_dpo_loss.item()
+
+                # Combine losses.
+                combined_loss = args.mix_ratio * ce_loss + (1 - args.mix_ratio) * batch_dpo_loss
+                combined_loss.backward()
+                optimizer.step()
+            avg_ce_loss = ce_loss_total / len(sonnet_dataloader)
+            avg_dpo_loss = dpo_loss_total / len(sonnet_dataloader)
+            print(f"Epoch {epoch} (Combined): avg CE loss = {avg_ce_loss:.3f}, avg DPO loss = {avg_dpo_loss:.3f}.")
+        else:
+            # Original cross-entropy training loop (if dpo_mode is not enabled).
+            for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+                b_ids, b_mask = batch['token_ids'], batch['attention_mask']
+                b_ids = b_ids.to(device)
+                b_mask = b_mask.to(device)
+                optimizer.zero_grad()
+                logits = model(b_ids, b_mask)
+                logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+                labels = b_ids[:, 1:].contiguous().flatten()
+                loss = F.cross_entropy(logits, labels, reduction='mean')
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+                num_samples += 1
+            avg_loss = epoch_loss / num_samples
+            print(f"Epoch {epoch}: train loss = {avg_loss:.3f}.")
+
+        print('Generating several output sonnets...')
+        model.eval()
+        for batch in held_out_sonnet_dataset:
+            encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
+            output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
+            print(f'{batch[1]}{output[1]}\n\n')
+        save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
 
 @torch.no_grad()
@@ -365,6 +485,8 @@ def get_args():
   #DPO Extension
   parser.add_argument("--dpo_mode", action='store_true', help="Enable Direct Preference Optimization training.")
   parser.add_argument("--beta", type=float, default=1.0, help="Beta scaling parameter for DPO loss.")
+  parser.add_argument("--mix_ratio", type=float, default=0.5, help="Mix ratio between CE loss and DPO loss. 1.0 = pure CE; 0.0 = pure DPO.")
+  parser.add_argument("--staged_dpo_epochs", type=int, default=2, help="Number of epochs to run pure CE loss before mixing in DPO loss.")
 
   args = parser.parse_args()
   return args
