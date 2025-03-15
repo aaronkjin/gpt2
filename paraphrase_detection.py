@@ -200,7 +200,7 @@ def get_args():
   parser.add_argument("--para_test_out", type=str, default="predictions/para-test-output.csv")
 
   parser.add_argument("--seed", type=int, default=11711)
-  parser.add_argument("--epochs", type=int, default=1)
+  parser.add_argument("--epochs", type=int, default=8)
   parser.add_argument("--use_gpu", action='store_true')
 
   parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
