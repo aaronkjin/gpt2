@@ -33,14 +33,19 @@ def model_eval_paraphrase(dataloader, model, device):
     logits = model(b_ids, b_mask).cpu().numpy()
     preds = np.argmax(logits, axis=1).flatten()
 
-    y_true.extend(labels)
+    # Map ground-truth labels from 3919 -> 0, 8505 -> 1
+    mapped_labels = (labels == 8505).long().cpu().numpy()
+    y_true.extend(mapped_labels)
     y_pred.extend(preds)
     sent_ids.extend(b_sent_ids)
 
   f1 = f1_score(y_true, y_pred, average='macro')
   acc = accuracy_score(y_true, y_pred)
 
-  return acc, f1, y_pred, y_true, sent_ids
+  final_y_pred = np.where(np.array(y_pred) == 1, 8505, 3919)
+  final_y_true = np.where(np.array(y_true) == 1, 8505, 3919)
+
+  return acc, f1, final_y_pred.tolist(), final_y_true.tolist(), sent_ids
 
 
 @torch.no_grad()
@@ -56,7 +61,9 @@ def model_test_paraphrase(dataloader, model, device):
     logits = model(b_ids, b_mask).cpu().numpy()
     preds = np.argmax(logits, axis=1).flatten()
 
-    y_pred.extend(preds)
+    mapped_preds = np.where(preds == 1, 8505, 3919)
+        
+    y_pred.extend(mapped_preds)
     sent_ids.extend(b_sent_ids)
 
   return y_pred, sent_ids
