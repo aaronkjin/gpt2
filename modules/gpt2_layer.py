@@ -31,6 +31,7 @@ class GPT2Layer(nn.Module):
     """
     transformed = dense_layer(output)
     dropped = dropout(transformed)
+    
     return input + dropped
 
 

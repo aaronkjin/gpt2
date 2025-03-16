@@ -73,11 +73,11 @@ class SonnetGPT(nn.Module):
     not just the last token! This will allow our model to learn the natural language distribution that composes sonnets,
     not just the distribution over next tokens for the last token!
     """
-    # Get the hidden states for all tokens in the sequence
     outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
     hidden_states = outputs["last_hidden_state"]
     hidden_states = F.dropout(hidden_states, p=0.2, training=self.training)
     logits = self.gpt.hidden_state_to_token(hidden_states)
+    
     return logits
 
 
@@ -100,69 +100,60 @@ class SonnetGPT(nn.Module):
 
     prompt_len = token_ids.shape[1]
     
-    # Count initial number of newlines to track how many lines we're starting with
+    # Num lines
     initial_text = self.tokenizer.decode(token_ids[0])
     initial_newlines = initial_text.count('\n')
     
-    # Keep track of the line count as we generate
     current_newlines = initial_newlines
-    line_count = 3  # We assume we start with the first 3 lines provided
+    line_count = 3
     
-    # Adjust temperatures for different parts of the sonnet
-    middle_quatrains_temp = temperature * 0.95  # Lower for middle quatrains
-    final_couplet_temp = temperature * 0.9    # Even lower for final couplet
+    # Control temp
+    middle_quatrains_temp = temperature * 0.95
+    final_couplet_temp = temperature * 0.9 
     
-    # Generate new tokens
     for _ in range(max_length):
-      # Forward pass to get logits
       logits_sequence = self.forward(token_ids, attention_mask)
-      
-      # Adjust temperature based on position in sonnet
       current_temp = temperature
+
       if line_count >= 4 and line_count < 12:
         current_temp = middle_quatrains_temp
       elif line_count >= 12:
         current_temp = final_couplet_temp
       
-      logits_last_token = logits_sequence[:, -1, :] / current_temp  # Apply temperature scaling
+      logits_last_token = logits_sequence[:, -1, :] / current_temp 
       
-      # Convert logits to probabilities
+      # Logits -> probs
       probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
       
       # Top-p sampling
       sorted_probs, sorted_indices = torch.sort(probs, descending=True)
       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
       top_p_mask = cumulative_probs <= top_p
-      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # Shift mask right for proper thresholding
-      top_p_mask[..., 0] = True  # Always include the highest probability token
-      filtered_probs = sorted_probs * top_p_mask  # Zero out unlikely tokens
-      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  # Normalize probabilities
+      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone() 
+      top_p_mask[..., 0] = True 
+      filtered_probs = sorted_probs * top_p_mask 
+      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True) 
       
-      # Sample from filtered distribution
       sampled_index = torch.multinomial(filtered_probs, 1)
       sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
       
-      # Stop generating if 14 lines reached or EOS token generated
+      # Early stop if 14 lines reached or EOS token generated
       if sampled_token.item() == self.tokenizer.eos_token_id or current_newlines >= initial_newlines + 14:
         break
       
-      # Append sampled token
       token_ids = torch.cat([token_ids, sampled_token], dim=1)
       attention_mask = torch.cat(
         [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
       )
       
-      # Update line count
       token_str = self.tokenizer.decode([sampled_token.item()])
+      
       if '\n' in token_str:
         current_newlines += 1
         if current_newlines > initial_newlines:
           line_count += 1
     
-    # Return generated sonnet
-    #generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     generated_output = self.tokenizer.decode(token_ids[0, prompt_len:].cpu().numpy().tolist())
-
 
     return token_ids, generated_output
 
