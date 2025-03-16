@@ -25,10 +25,10 @@ Run training for:
 
 ```bash
 # sentiment classification (full model)
-python3 classifier.py –fine-tune-mode full-model –batch_size 128 –lr 1e-5 hidden_dropout_prob=0.1 –epochs=10
+python classifier.py –fine-tune-mode full-model –batch_size 128 –lr 1e-5 hidden_dropout_prob=0.1 –epochs=10
 
 # sentiment classification (last linear layer)
-python3 classifier.py –fine-tune-mode last-linear-layer –batch_size 64 –lr 1e-3 hidden_dropout_prob=0.1 –epochs=10
+python classifier.py –fine-tune-mode last-linear-layer –batch_size 64 –lr 1e-3 hidden_dropout_prob=0.1 –epochs=10
 ```
 
 ```bash
