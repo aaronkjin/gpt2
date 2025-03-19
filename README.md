@@ -4,7 +4,7 @@ A decoder-only, autoregressive transformer LM using GPT-2 architecture. A CS 224
 
 Poster:
 
-![Image](https://github.com/user-attachments/assets/b469b340-000f-4dc6-810c-116e39056dbc)
+![Image](https://github.com/user-attachments/assets/22ca5c3f-8e77-4d42-98de-d7f8c7a72560)
 
 ## Getting Started
 
