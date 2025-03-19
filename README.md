@@ -2,6 +2,10 @@
 
 A decoder-only, autoregressive transformer LM using GPT-2 architecture. A CS 224N final project.
 
+Poster:
+
+![Image](https://github.com/user-attachments/assets/b469b340-000f-4dc6-810c-116e39056dbc)
+
 ## Getting Started
 
 1. Set up a Conda environment
