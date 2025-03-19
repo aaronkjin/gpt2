@@ -5,3 +5,4 @@
 *.pkl
 .idea/
 out/
+.DS_Store

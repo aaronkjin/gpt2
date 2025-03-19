@@ -1,6 +1,6 @@
 # GPT-2
 
-An autocomplete language model using GPT-2 architecture. A CS 224N final project.
+A decoder-only, autoregressive transformer LM using GPT-2 architecture. A CS 224N final project.
 
 ## Getting Started
 
@@ -49,7 +49,7 @@ python sonnet_generation.py --use_gpu
 
 ## Background
 
-GPT-2 is a large, transformer-based language model that generates text via predicting the next word given context. We focus on building a smaller version of GPT-2 from scratch, focusing on its architecture (e.g. multi-head self-attention, position-wise feed-forward networks, byte-pair encoding for tokenization).
+GPT-2 is a large, transformer-based language model that generates text via predicting the next word given context. We focus on building a smaller version of GPT-2 from scratch, focusing on its architecture (e.g. multi-head self-attention, position-wise feed-forward networks, byte-pair encoding for tokenization). Our model is also designed for both generative and classification tasks.
 
 ## Developers
 
